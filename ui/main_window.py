@@ -329,7 +329,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def _apply_style(self):
         self.setStyleSheet(
             """
-            QMainWindow, QWidget { background: #ffffff; color: #111111; }
+            QMainWindow, QWidget { background: #EDEDED; color: #111111; }
             QWidget { font-family: "Segoe UI"; font-size: 10.5pt; }
             QLabel#Title { font-size: 20pt; font-weight: 700; }
             QLabel#Subtitle { color: #666; }
