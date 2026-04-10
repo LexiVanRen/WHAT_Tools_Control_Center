@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 from PySide6 import QtCore, QtGui, QtWidgets
@@ -12,12 +14,12 @@ from ui.models import MANIFEST_URL, INSTALLERS_DIR, GITHUB_ROOT, WHAT_REPO_FOLDE
 from ui.manifest_client import fetch_manifest
 from ui.installer_scan import find_installer_for_app, InstallerInfo
 from ui.inno_version import read_myappversion_from_iss
-from ui.build_ops import build_repo, copy_installer, update_manifest_from_iss
+from ui.build_ops import build_repo, copy_installer, update_manifest_from_iss, add_app_to_manifest
 from ui.cache_store import CacheStore, AppCache, CachedApp, CachedManifest, CachedInstaller, CachedGithub, default_cache
 
-CACHE_PATH = "cache/app_cache.json"
-
-
+CACHE_PATH = os.path.join(os.getenv("LOCALAPPDATA"), "WHATControlCenter", "cache")
+INSTALLER_URL = "https://rndserver-stg.abcparts.be/software_programs/"
+ICO_URL = "https://rndserver-stg.abcparts.be/abc_applauncher/static/"
 @dataclass
 class RowState:
     build: bool = False
@@ -93,6 +95,41 @@ class RunPlanWorker(QtCore.QObject):
         self.app_map = app_map
         self.installers_dir = installers_dir
 
+    def _find_local_output_installer(self, app: CachedApp) -> str:
+        repo_path = getattr(app.github, "repo_path", "") or ""
+        if not repo_path:
+            return ""
+
+        output_dir = Path(repo_path) / "Output"
+        if not output_dir.is_dir():
+            return ""
+
+        app_name = (app.name or "").strip()
+        exact_candidates = [
+            f"{app_name}_installer.exe",
+            f"{app_name.lower()}_installer.exe",
+            f"{app_name.upper()}_installer.exe",
+        ]
+        for filename in exact_candidates:
+            p = output_dir / filename
+            if p.is_file():
+                return str(p)
+
+        exes = list(output_dir.glob("*.exe"))
+        if not exes:
+            return ""
+
+        app_l = app_name.lower()
+        named_installers = [p for p in exes if "installer" in p.name.lower() and app_l in p.name.lower()]
+        if named_installers:
+            return str(max(named_installers, key=lambda p: p.stat().st_mtime))
+
+        installers = [p for p in exes if "installer" in p.name.lower()]
+        if installers:
+            return str(max(installers, key=lambda p: p.stat().st_mtime))
+
+        return str(max(exes, key=lambda p: p.stat().st_mtime))
+
     @QtCore.Slot()
     def run(self):
         for app_name, do_build, do_copy, do_manifest in self.plan:
@@ -112,10 +149,10 @@ class RunPlanWorker(QtCore.QObject):
                 latest_installer = r.latest_installer
 
             if do_copy:
-                # If user selected copy without build, try best-known: newest exe in repo Output OR cached installer exe_path
-                src = latest_installer or app.installer.exe_path
-                if not src:
-                    self.step.emit(f"{app_name}: no installer path known to copy.")
+                # If user selected copy without build, use local repo Output installer.
+                src = latest_installer or self._find_local_output_installer(app)
+                if not src: 
+                    self.step.emit(f"{app_name}: no installer found in local Output folder.")
                 else:
                     self.step.emit(f"{app_name}: copying to Z…")
                     r = copy_installer(src, self.installers_dir)
@@ -157,6 +194,122 @@ class InstallerSingleWorker(QtCore.QObject):
             self.finished.emit(self.app_name, None, str(e))
 
 
+class NewAppDialog(QtWidgets.QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Add New App")
+        self.resize(650, 420)
+
+        layout = QtWidgets.QVBoxLayout(self)
+        form = QtWidgets.QFormLayout()
+        form.setLabelAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+        layout.addLayout(form)
+
+        self.app_name = QtWidgets.QLineEdit()
+        self.latest_version = QtWidgets.QLineEdit()
+        self.description = QtWidgets.QLineEdit()
+        self.installer_url = QtWidgets.QLineEdit()
+        self.supported_os = QtWidgets.QLineEdit()
+        self.icon = QtWidgets.QLineEdit()
+        self.registry_name = QtWidgets.QLineEdit()
+        self.info_text = QtWidgets.QLineEdit()
+
+        form.addRow("App name", self.app_name)
+        form.addRow("Latest version", self.latest_version)
+        form.addRow("Description", self.description)
+        form.addRow("Installer URL", self.installer_url)
+        form.addRow("Supported OS", self.supported_os)
+        form.addRow("Icon", self.icon)
+        form.addRow("Registry name", self.registry_name)
+        form.addRow("Info text", self.info_text)
+
+
+        hint = QtWidgets.QLabel("For supported OS, use commas for multiple values (example: Windows, Linux).\nDont forget to upload the ico image manually!")
+        hint.setObjectName("Subtitle")
+        layout.addWidget(hint)
+
+        self._icon_dirty = False
+        self._registry_dirty = False
+        self._installer_url_dirty = False
+        self._info_text_dirty = False
+
+        self.icon.textEdited.connect(lambda _: setattr(self, "_icon_dirty", True))
+        self.registry_name.textEdited.connect(lambda _: setattr(self, "_registry_dirty", True))
+        self.installer_url.textEdited.connect(lambda _: setattr(self, "_installer_url_dirty", True))
+        self.info_text.textChanged.connect(self._on_info_text_changed)
+        self.app_name.textChanged.connect(self._apply_prefills)
+        #☺self.latest_version.textChanged.connect(self._apply_prefills)
+
+        self._apply_prefills()
+
+        buttons = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
+        buttons.button(QtWidgets.QDialogButtonBox.Ok).setText("Create")
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _on_info_text_changed(self):
+        if self.info_text.text() != "Tool":
+            self._info_text_dirty = True
+
+    def _apply_prefills(self):
+        app = self.app_name.text().strip()
+        ver = self.latest_version.text().strip()
+        app_slug = app.replace(" ", "_")
+
+        if not self._info_text_dirty and not self.info_text.text().strip(): 
+            self.info_text.setText("Tool")
+
+        if not self._icon_dirty:
+            self.icon.setText(f"{ICO_URL}{app_slug.lower()}.ico" if app_slug else "")
+
+        if not self._registry_dirty: 
+            self.registry_name.setText(app_slug)
+
+        if not self._installer_url_dirty:
+            if app_slug:
+                self.installer_url.setText(
+                    f"{INSTALLER_URL}{app_slug}_installer.exe"
+                )
+            else:
+                self.installer_url.setText("") 
+
+    def _required_fields(self) -> list[tuple[str, str]]:
+        return [
+            ("app_name", self.app_name.text().strip()),
+            ("latest_version", self.latest_version.text().strip()),
+            ("description", self.description.text().strip()),
+            ("installer_url", self.installer_url.text().strip()),
+            ("supported_os", self.supported_os.text().strip()),
+            ("icon", self.icon.text().strip()),
+            ("info_text", self.info_text.toPlainText().strip()),
+            ("registry_name", self.registry_name.text().strip()),
+        ]
+
+    def accept(self):
+        missing = [name for name, value in self._required_fields() if not value]
+        if missing:
+            QtWidgets.QMessageBox.warning(self, "Missing fields", f"Please fill: {', '.join(missing)}")
+            return
+        super().accept()
+
+    def payload(self) -> dict:
+        supported_raw = self.supported_os.text().strip()
+        supported = [p.strip() for p in supported_raw.split(",") if p.strip()]
+        supported_value = supported if supported else [supported_raw]
+
+        return {
+            "app_name": self.app_name.text().strip(),
+            "latest_version": self.latest_version.text().strip(),
+            "description": self.description.text().strip(),
+            "installer_url": self.installer_url.text().strip(),
+            "supported_os": supported_value,
+            "icon": self.icon.text().strip(),
+            "info_text": self.info_text.toPlainText().strip(),
+            "registry_name": self.registry_name.text().strip(),
+        }
+
+
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
@@ -168,6 +321,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self._manifest: Optional[ManifestData] = None
         self._row_states: dict[str, RowState] = {}
+        self._refresh_all_in_progress: bool = False
 
         self._build_ui()
         self._apply_style()
@@ -205,16 +359,24 @@ class MainWindow(QtWidgets.QMainWindow):
         header.addLayout(btn_box, 0)
 
         self.btn_refresh_manifest = QtWidgets.QPushButton("Refresh manifest version")
+        self.btn_refresh_manifest.setObjectName("RefreshSingleButton")
         self.btn_refresh_manifest.clicked.connect(self.refresh_manifest_all)
         btn_box.addWidget(self.btn_refresh_manifest)
 
         self.btn_refresh_installers = QtWidgets.QPushButton("Refresh installer versions")
+        self.btn_refresh_installers.setObjectName("RefreshSingleButton")
         self.btn_refresh_installers.clicked.connect(self.refresh_installers_all)
         btn_box.addWidget(self.btn_refresh_installers)
 
         self.btn_refresh_github = QtWidgets.QPushButton("Refresh Local versions")
+        self.btn_refresh_github.setObjectName("RefreshSingleButton")
         self.btn_refresh_github.clicked.connect(self.refresh_github_all)
         btn_box.addWidget(self.btn_refresh_github)
+
+        self.btn_refresh_all = QtWidgets.QPushButton("Refresh all versions")
+        self.btn_refresh_all.setObjectName("RefreshAllButton")
+        self.btn_refresh_all.clicked.connect(self.refresh_all)
+        btn_box.addWidget(self.btn_refresh_all)
 
         self.btn_run = QtWidgets.QPushButton("Run selected (stub)")
         self.btn_run.setObjectName("PrimaryButton")
@@ -227,18 +389,22 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addLayout(bulk)
 
         self.btn_all_build = QtWidgets.QPushButton("Select all: Build")
+        self.btn_all_build.setObjectName("SelectBuild")
         self.btn_all_build.clicked.connect(lambda: self.set_all_column("build", True))
         bulk.addWidget(self.btn_all_build)
 
         self.btn_all_copy = QtWidgets.QPushButton("Select all: Copy")
+        self.btn_all_copy.setObjectName("SelectCopy")
         self.btn_all_copy.clicked.connect(lambda: self.set_all_column("copy", True))
         bulk.addWidget(self.btn_all_copy)
 
         self.btn_all_upd_manifest = QtWidgets.QPushButton("Select all: Update manifest")
+        self.btn_all_upd_manifest.setObjectName("SelectUpdateManifest")
         self.btn_all_upd_manifest.clicked.connect(lambda: self.set_all_column("update_manifest", True))
         bulk.addWidget(self.btn_all_upd_manifest)
 
         self.btn_clear = QtWidgets.QPushButton("Clear all")
+        self.btn_clear.setObjectName("ClearAll")
         self.btn_clear.clicked.connect(self.clear_all)
         bulk.addWidget(self.btn_clear)
 
@@ -323,6 +489,18 @@ class MainWindow(QtWidgets.QMainWindow):
 
         layout.addWidget(log_card, 0)
 
+        new_app_row = QtWidgets.QHBoxLayout()
+        layout.addLayout(new_app_row)
+        new_app_row.addStretch(1)
+
+        self.btn_new_app = QtWidgets.QPushButton("+ New App")
+        self.btn_new_app.setObjectName("NewAppButton")
+        self.btn_new_app.clicked.connect(self.open_new_app_dialog)
+        self.btn_new_app.setMinimumHeight(56)
+        self.btn_new_app.setMinimumWidth(260)
+        new_app_row.addWidget(self.btn_new_app)
+        new_app_row.addStretch(1)
+
         # Keep layout nice if window is tall
         layout.addStretch(1)
 
@@ -346,14 +524,115 @@ class MainWindow(QtWidgets.QMainWindow):
 
             QPushButton#PrimaryButton {
                 background: #1f6feb;
-                border: 1px solid #1f6feb;
+                border: 1px solid #808080;
                 color: white;
                 font-weight: 600;
+                
+                font-size: 14pt;
+                padding: 7px 15px;
+                border-radius: 12px;
+                
+                
+                
             }
             QPushButton#PrimaryButton:hover {
                 background: #1a5fd1;
-                border-color: #1a5fd1;
+                border-color: #1a5fd1;s
             }
+
+            QPushButton#RefreshAllButton {
+                background: #EB1FC2;
+                border: 1px solid #808080;
+                color: white;
+                font-weight: 600;
+                                
+                font-size: 14pt;
+                padding: 7px 15px;
+                border-radius: 12px;
+                
+            }
+            QPushButton#RefreshAllButton:hover {
+                background: #CF19AA;
+                border-color: #CF19AA;
+            }
+
+            
+            QPushButton#RefreshSingleButton {
+                background: #F7B5EB;
+                border: 1px solid #808080;
+                color: white;
+                font-weight: 600;
+                                
+                font-size: 9pt;                
+            }
+            QPushButton#RefreshSingleButton:hover {
+                background: #E3B5F7;
+                border-color: #E3B5F7;
+            }
+
+            QPushButton#NewAppButton {
+                background: #1B8A5A;
+                border: 1px solid #808080;
+                color: white;
+                font-weight: 600;
+                font-size: 14pt;
+                padding: 14px 30px;
+                border-radius: 12px;
+            }
+            QPushButton#NewAppButton:hover {
+                background: #16754C;
+                border-color: #16754C;
+            }
+
+            QPushButton#SelectCopy {
+                background: rgba(177, 42, 218, 0.15);
+                border: 1px solid rgba(177, 42, 218, 0.15);
+                color: black;
+                font-weight: 600;
+                
+            }
+            QPushButton#SelectCopy:hover {
+                background: rgba(177, 42, 218, 0.40);
+                border-color: #808080;
+            }
+            
+            QPushButton#SelectBuild {
+                background: rgba(31, 111, 235, 0.10);
+                border: 1px solid rgba(31, 111, 235, 0.10);
+                color: black;
+                font-weight: 600;
+                
+            }
+            QPushButton#SelectBuild:hover {
+                background: rgba(31, 111, 235, 0.40);
+                border-color: #808080;
+            }
+            
+            QPushButton#SelectUpdateManifest {
+                background: rgba(255, 193, 7, 0.14);
+                border: 1px solid rgba(255, 193, 7, 0.14);
+                color: black;
+                font-weight: 600;
+                
+            }
+            QPushButton#SelectUpdateManifest:hover {
+                background: rgba(255, 193, 7, 0.4);
+                border-color: #808080;
+            }
+
+            QPushButton#ClearAll {
+                background: black;
+                border: 1px solid white;
+                color: white;
+                font-weight: 600;
+                
+            }
+            QPushButton#ClearAll:hover {
+                background: white;
+                border-color: #000000;
+                color: black;
+            }
+
 
             QTableWidget#AppsTable {
                 border: 1px solid #dcdcdc;
@@ -385,7 +664,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 padding: 8px;
                 font-family: Consolas;
                 font-size: 9.5pt;
-            }
+            } 
 
             QWidget#ActionCell[hint="none"] {
                 background: transparent;
@@ -394,6 +673,10 @@ class MainWindow(QtWidgets.QMainWindow):
             QWidget#ActionCell[hint="build"] {
                 background: rgba(31, 111, 235, 0.10);
 
+            }
+
+            QWidget#ActionCell[hint="copy"] {
+                background: rgba(177, 42, 218, 0.15);
             }
             
             QWidget#ActionCell[hint="manifest"] {
@@ -414,13 +697,13 @@ class MainWindow(QtWidgets.QMainWindow):
             }
 
             QWidget#ActionCell QCheckBox::indicator:hover {
-                border-color: #1f6feb;
+                border-color: #000000;
                 background: #f4f8ff;
             }
 
             QWidget#ActionCell QCheckBox::indicator:checked {
-                border-color: #1f6feb;
-                background: #1f6feb;
+                border-color: #000000;
+                background: #000000;
                 image: none;
             }
 
@@ -497,6 +780,28 @@ class MainWindow(QtWidgets.QMainWindow):
     def _set_status(self, msg: str):
         self.lbl_status.setText(msg)
         self.log(msg)
+
+    def open_new_app_dialog(self):
+        if self._refresh_all_in_progress:
+            QtWidgets.QMessageBox.information(self, "Busy", "Wait for Refresh all to complete first.")
+            return
+
+        dlg = NewAppDialog(self)
+        if dlg.exec() != QtWidgets.QDialog.Accepted:
+            return
+
+        payload = dlg.payload()
+        app_name = str(payload.get("app_name", "")).strip()
+        self._set_status(f"Creating new app: {app_name}")
+        result = add_app_to_manifest(payload)
+        self._set_status(result.message)
+
+        if not result.ok:
+            QtWidgets.QMessageBox.critical(self, "Create app failed", result.message)
+            return
+
+        QtWidgets.QMessageBox.information(self, "App created", f"App '{app_name}' added to manifest.")
+        self.refresh_manifest_all()
 
     def _populate_table_from_cache(self):
         self.table.setRowCount(0)
@@ -632,6 +937,16 @@ class MainWindow(QtWidgets.QMainWindow):
     # ---------------------------
     # Refresh manifest -> rebuild cache -> update UI
     # ---------------------------
+    def refresh_all(self):
+        if self._refresh_all_in_progress:
+            self._set_status("Refresh all already running.")
+            return
+
+        self._refresh_all_in_progress = True
+        self.btn_refresh_all.setEnabled(False)
+        self._set_status("Refresh all: fetching manifest...")
+        self.refresh_manifest_all()
+
     def refresh_manifest_all(self):
         self._set_status("Fetching manifest…")
         self.btn_refresh_manifest.setEnabled(False)
@@ -653,6 +968,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.btn_refresh_manifest.setEnabled(True)
 
         if error:
+            if self._refresh_all_in_progress:
+                self._refresh_all_in_progress = False
+                self.btn_refresh_all.setEnabled(True)
             self._set_status(f"Manifest error: {error}")
             return
 
@@ -689,6 +1007,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.lbl_subtitle.setText(f"Manifest version: v{mv} • Cached at: {self.cache.updated_at_utc}")
         self._populate_table_from_cache()
         self._set_status("Manifest refreshed + cached.")
+
+        if self._refresh_all_in_progress:
+            self._set_status("Refresh all: refreshing installer versions...")
+            self.refresh_installers_all()
 
     def _compute_github_paths(self, app_name: str) -> tuple[str, str]:
         # 1) explicit overrides win
@@ -741,7 +1063,14 @@ class MainWindow(QtWidgets.QMainWindow):
         if not getattr(self, "_install_queue", None):
             self._save_cache()
             self._populate_table_from_cache()
-            self._set_status("Installer refresh done + cached.")
+            if self._refresh_all_in_progress:
+                self._set_status("Installer refresh done + cached. Refresh all: refreshing local versions...")
+                self.refresh_github_all()
+                self._refresh_all_in_progress = False
+                self.btn_refresh_all.setEnabled(True)
+                self._set_status("Refresh all done.")
+            else:
+                self._set_status("Installer refresh done + cached.")
             return
 
         app_name = self._install_queue.pop(0)
@@ -756,7 +1085,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._i_worker.finished.connect(self._i_thread.quit)
         self._i_worker.finished.connect(self._i_worker.deleteLater)
         self._i_thread.finished.connect(self._i_thread.deleteLater)
-
+ 
         self._i_thread.start()
 
     @QtCore.Slot(object, object, object)
@@ -821,6 +1150,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # Then apply tints to their wrapper widgets
         self._tint_checkbox_cell(row, 6, gh_newer_than_inst, "build")
+        self._tint_checkbox_cell(row, 7, gh_newer_than_inst, "copy")
         self._tint_checkbox_cell(row, 8, inst_ge_manifest, "manifest")
 
     def _set_checkbox(self, row: int, col: int, app_name: str, field: str):
@@ -902,6 +1232,13 @@ class MainWindow(QtWidgets.QMainWindow):
     # ---------------------------
     # Stub run
     # ---------------------------
+    @QtCore.Slot()
+    def _on_run_finished(self):
+        self.btn_run.setEnabled(True)
+        self._save_cache()
+        self._populate_table_from_cache()
+        self._set_status("Run finished.")
+
     def run_selected_stub(self):
         # Build a plan from current checkbox states
         plan: list[tuple[str, bool, bool, bool]] = []
@@ -927,14 +1264,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._run_thread.started.connect(self._run_worker.run)
         self._run_worker.step.connect(self.log)
         self._run_worker.step.connect(self._set_status)
-
-        def _done():
-            self.btn_run.setEnabled(True)
-            self._save_cache()
-            self._populate_table_from_cache()
-            self._set_status("Run finished.")
-
-        self._run_worker.finished.connect(_done)
+        self._run_worker.finished.connect(self._on_run_finished)
         self._run_worker.finished.connect(self._run_thread.quit)
         self._run_worker.finished.connect(self._run_worker.deleteLater)
         self._run_thread.finished.connect(self._run_thread.deleteLater)

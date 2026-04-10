@@ -13,7 +13,9 @@ from typing import Optional
 import requests
 
 INNO_COMPILER = r"C:\Program Files (x86)\Inno Setup 5\ISCC.exe"
-UPDATE_MANIFEST_BASE = "https://rndserver-stg.abcparts.be/api/update_manifest"
+SERVER = "https://rndserver-stg.abcparts.be"
+UPDATE_MANIFEST_BASE = f"{SERVER}/api/update_manifest"
+ADD_APP_TO_MANIFEST_URL = f"{SERVER}/api/add_app_to_manifest"
 
 
 @dataclass(frozen=True)
@@ -147,3 +149,24 @@ def update_manifest_from_iss(iss_path: str) -> BuildResult:
         return BuildResult(False, f"Manifest update failed ({resp.status_code}): {resp.text}")
     except Exception as e:
         return BuildResult(False, f"Manifest update error: {e}")
+
+
+def add_app_to_manifest(payload: dict) -> BuildResult:
+    try:
+        resp = requests.post(ADD_APP_TO_MANIFEST_URL, json=payload, timeout=12)
+        if resp.status_code in (200, 201):
+            return BuildResult(True, "New app added to manifest.")
+
+        err_text = resp.text
+        try:
+            data = resp.json()
+            if isinstance(data, dict):
+                if data.get("message"):
+                    err_text = str(data.get("message"))
+                elif data.get("error"):
+                    err_text = str(data.get("error"))
+        except Exception:
+            pass
+        return BuildResult(False, f"Add app failed ({resp.status_code}): {err_text}")
+    except Exception as e:
+        return BuildResult(False, f"Add app request error: {e}")
