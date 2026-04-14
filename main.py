@@ -20,11 +20,11 @@ def show_error(message, title="Error"):
 
 
 if __name__ == "__main__":
-    """if is_admin():
+    if is_admin():
         show_error(
             "This application cannot be run as Administrator.\n\n"
             "Please restart it normally."
         )
-        sys.exit(1)"""
+        sys.exit(1)
 
     run_app()

@@ -43,12 +43,20 @@ def _pyinstaller_cmd(repo: Path, spec: Path) -> list[str]:
     """
     Matches the two build scripts:
       - If repo has Python27 + PyInstaller-3.2.1 runner -> use that (legacy)
-      - Else use current python -m PyInstaller
+      - Else if repo has venv with pyton --> use this
+      - Fallback
     """
     py27 = repo / "Python27" / "python.exe"
     pi_runner = repo / "Python27" / "PyInstaller-3.2.1" / "pyinstaller.py"
     if py27.is_file() and pi_runner.is_file():
         return [str(py27), str(pi_runner), "--clean", str(spec.name)]
+
+
+    venv_python = repo / ".venv" / "Scripts" / "python.exe"
+    if venv_python.is_file():
+        return [str(venv_python), "-m", "PyInstaller", "--clean", "-y", str(spec.name)]
+
+    # fallback
     return [sys.executable, "-m", "PyInstaller", "--clean", "-y", str(spec.name)]
 
 

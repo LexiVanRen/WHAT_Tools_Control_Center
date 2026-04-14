@@ -328,6 +328,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # Load cache instantly
         self._load_cache_into_ui()
+        #self.refresh_all()
 
     # ---------------------------
     # UI
@@ -378,7 +379,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.btn_refresh_all.clicked.connect(self.refresh_all)
         btn_box.addWidget(self.btn_refresh_all)
 
-        self.btn_run = QtWidgets.QPushButton("Run selected (stub)")
+        self.btn_run = QtWidgets.QPushButton("Run selected")
         self.btn_run.setObjectName("PrimaryButton")
         self.btn_run.clicked.connect(self.run_selected_stub)
         btn_box.addWidget(self.btn_run)
