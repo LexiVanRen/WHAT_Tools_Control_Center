@@ -379,7 +379,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.btn_refresh_all.clicked.connect(self.refresh_all)
         btn_box.addWidget(self.btn_refresh_all)
 
-        self.btn_run = QtWidgets.QPushButton("Run selected")
+        self.btn_run = QtWidgets.QPushButton("Run")
         self.btn_run.setObjectName("PrimaryButton")
         self.btn_run.clicked.connect(self.run_selected_stub)
         btn_box.addWidget(self.btn_run)
@@ -1236,9 +1236,12 @@ class MainWindow(QtWidgets.QMainWindow):
     @QtCore.Slot()
     def _on_run_finished(self):
         self.btn_run.setEnabled(True)
+        # Clear selections first (UI reset)
+        self.clear_all()
         self._save_cache()
         self._populate_table_from_cache()
-        self._set_status("Run finished.")
+        self._set_status("Run finished. Refreshing all…")
+        self.refresh_all()
 
     def run_selected_stub(self):
         # Build a plan from current checkbox states
@@ -1263,7 +1266,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._run_worker.moveToThread(self._run_thread)
 
         self._run_thread.started.connect(self._run_worker.run)
-        self._run_worker.step.connect(self.log)
+        #self._run_worker.step.connect(self.log)
         self._run_worker.step.connect(self._set_status)
         self._run_worker.finished.connect(self._on_run_finished)
         self._run_worker.finished.connect(self._run_thread.quit)
