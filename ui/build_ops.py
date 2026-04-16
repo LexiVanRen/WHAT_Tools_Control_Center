@@ -26,7 +26,21 @@ class BuildResult:
 
 
 def _run(cmd: list[str], cwd: str) -> None:
-    subprocess.run(cmd, cwd=cwd, check=True)
+    startupinfo = None
+    creationflags = 0
+
+    if os.name == "nt":
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        creationflags = subprocess.CREATE_NO_WINDOW
+
+    subprocess.run(
+        cmd,
+        cwd=cwd,
+        check=True,
+        startupinfo=startupinfo,
+        creationflags=creationflags,
+    )
 
 
 def _find_spec(repo: Path) -> Optional[Path]:
