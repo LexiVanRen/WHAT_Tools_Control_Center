@@ -8,6 +8,7 @@ WHAT_REPO_FOLDER = "Applauncher"
 INNO_ISS_RELATIVE = "inno_setup_script_for_making_installer.iss"
 GITHUB_REPO_OVERRIDES = {
     "CAN": r"C:\Users\ABC-RnD\PycharmProjects\CAN",
+    "SRAM Reader":r"C:\Users\ABC-RnD\Documents\GitHub\SRAM_Tool"
 }
 # Where installers are dropped (your network drive)
 INSTALLERS_DIR = r"Z:\R&D\WHAT_installers"

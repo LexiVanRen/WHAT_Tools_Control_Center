@@ -282,7 +282,7 @@ class NewAppDialog(QtWidgets.QDialog):
             ("installer_url", self.installer_url.text().strip()),
             ("supported_os", self.supported_os.text().strip()),
             ("icon", self.icon.text().strip()),
-            ("info_text", self.info_text.toPlainText().strip()),
+            ("info_text", self.info_text.text().strip()),
             ("registry_name", self.registry_name.text().strip()),
         ]
 
@@ -305,7 +305,7 @@ class NewAppDialog(QtWidgets.QDialog):
             "installer_url": self.installer_url.text().strip(),
             "supported_os": supported_value,
             "icon": self.icon.text().strip(),
-            "info_text": self.info_text.toPlainText().strip(),
+            "info_text": self.info_text.text().strip(),
             "registry_name": self.registry_name.text().strip(),
         }
 
