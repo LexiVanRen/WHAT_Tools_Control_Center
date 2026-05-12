@@ -8,7 +8,14 @@ WHAT_REPO_FOLDER = "Applauncher"
 INNO_ISS_RELATIVE = "inno_setup_script_for_making_installer.iss"
 GITHUB_REPO_OVERRIDES = {
     "CAN": r"C:\Users\ABC-RnD\PycharmProjects\CAN",
-    "SRAM Reader":r"C:\Users\ABC-RnD\Documents\GitHub\SRAM_Tool"
+    "SRAM Reader": r"C:\Users\ABC-RnD\Documents\GitHub\SRAM_Tool",
+    "SAC Offline": r"C:\Users\ABC-RnD\Documents\GitHub\SAC_Offline_Tool",
+}
+LOCAL_VERSION_PACKAGE_JSON_OVERRIDES = {
+    "SAC Offline": r"C:\Users\ABC-RnD\Documents\GitHub\SAC_Offline_Tool\package.json",
+}
+INSTALLER_NAME_OVERRIDES = {
+    "SRAM Reader": "SRAMReader",
 }
 # Where installers are dropped (your network drive)
 INSTALLERS_DIR = r"Z:\R&D\WHAT_installers"
@@ -50,7 +57,11 @@ def parse_manifest(payload: dict[str, Any], *, source_url: str) -> ManifestData:
     )
 
     apps_block = payload.get("Apps", {}) or {}
-    for name in sorted(apps_block.keys(), key=lambda s: s.lower()):
+    app_names = sorted(apps_block.keys(), key=lambda s: s.lower())
+    if "SAC Offline" in app_names:
+        app_names = [n for n in app_names if n != "SAC Offline"] + ["SAC Offline"]
+
+    for name in app_names:
         a = apps_block.get(name, {}) or {}
         apps.append(
             AppEntry(

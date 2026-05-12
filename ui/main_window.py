@@ -9,12 +9,12 @@ from typing import Optional
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from ui.models import MANIFEST_URL, INSTALLERS_DIR, GITHUB_ROOT, WHAT_REPO_FOLDER, INNO_ISS_RELATIVE, \
-    GITHUB_REPO_OVERRIDES, ManifestData
+    GITHUB_REPO_OVERRIDES, LOCAL_VERSION_PACKAGE_JSON_OVERRIDES, ManifestData
 
 from ui.manifest_client import fetch_manifest
 from ui.installer_scan import find_installer_for_app, InstallerInfo
-from ui.inno_version import read_myappversion_from_iss
-from ui.build_ops import build_repo, copy_installer, update_manifest_from_iss, add_app_to_manifest
+from ui.inno_version import read_myappversion_from_iss, read_version_from_package_json
+from ui.build_ops import BuildResult, build_repo, copy_installer, update_manifest_from_iss, update_manifest_for_app_version, add_app_to_manifest
 from ui.cache_store import CacheStore, AppCache, CachedApp, CachedManifest, CachedInstaller, CachedGithub, default_cache
 
 CACHE_PATH = os.path.join(os.getenv("LOCALAPPDATA"), "WHATControlCenter", "cache")
@@ -142,7 +142,7 @@ class RunPlanWorker(QtCore.QObject):
 
             if do_build:
                 self.step.emit(f"{app_name}: building…")
-                r = build_repo(app.github.repo_path, app.github.inno_iss_path)
+                r = build_repo(app.github.repo_path, app.github.inno_iss_path, app_name=app_name)
                 self.step.emit(f"{app_name}: {r.message}")
                 if not r.ok:
                     continue
@@ -160,7 +160,15 @@ class RunPlanWorker(QtCore.QObject):
 
             if do_manifest:
                 self.step.emit(f"{app_name}: updating manifest…")
-                r = update_manifest_from_iss(app.github.inno_iss_path)
+                if app_name == "SAC Offline":
+                    package_json_path = LOCAL_VERSION_PACKAGE_JSON_OVERRIDES.get(app_name, "")
+                    app_version = read_version_from_package_json(package_json_path) if package_json_path else ""
+                    if not app_version:
+                        r = BuildResult(False, f"Could not read version from {package_json_path}")
+                    else:
+                        r = update_manifest_for_app_version(app_name, app_version)
+                else:
+                    r = update_manifest_from_iss(app.github.inno_iss_path)
                 self.step.emit(f"{app_name}: {r.message}")
 
         self.finished.emit()
@@ -840,7 +848,7 @@ class MainWindow(QtWidgets.QMainWindow):
             v = v[1:].strip()
         return v
 
-    def _apply_version_colors_for_row(self, row: int, man_v: str, inst_v: str, gh_v: str):
+    def _apply_version_colors_for_row(self, row: int, app_name: str, man_v: str, inst_v: str, gh_v: str):
         """
         Colors only the version cells:
           col 1 = manifest version
@@ -851,17 +859,21 @@ class MainWindow(QtWidgets.QMainWindow):
         iv = self._norm_ver(inst_v)
         gv = self._norm_ver(gh_v)
 
-        # Decide status
-        present = [x for x in (mv, iv, gv) if x]
-        all_present = (mv != "" and iv != "" and gv != "")
-        all_equal = (all_present and mv == iv == gv)
+        # SAC Offline has no installer by design: compare only manifest vs local.
+        if app_name == "SAC Offline":
+            all_present = (mv != "" and gv != "")
+            all_equal = (all_present and mv == gv)
+            mismatch = (mv != "" and gv != "" and mv != gv)
+        else:
+            all_present = (mv != "" and iv != "" and gv != "")
+            all_equal = (all_present and mv == iv == gv)
 
-        mismatch = False
-        # mismatch means: if installer/github exists and differs from manifest
-        if mv and iv and mv != iv:
-            mismatch = True
-        if mv and gv and mv != gv:
-            mismatch = True
+            mismatch = False
+            # mismatch means: if installer/github exists and differs from manifest
+            if mv and iv and mv != iv:
+                mismatch = True
+            if mv and gv and mv != gv:
+                mismatch = True
 
         if all_equal:
             bg = QtGui.QColor("#E8F5E9")  # light green
@@ -1052,8 +1064,13 @@ class MainWindow(QtWidgets.QMainWindow):
                 app.github.repo_path = repo_path
                 app.github.inno_iss_path = iss_path
 
-            self.log(f"Reading Inno version from: {iss_path}")
-            ver = read_myappversion_from_iss(iss_path)
+            package_json_path = LOCAL_VERSION_PACKAGE_JSON_OVERRIDES.get(app.name, "")
+            if package_json_path:
+                self.log(f"Reading local version from package.json: {package_json_path}")
+                ver = read_version_from_package_json(package_json_path)
+            else:
+                self.log(f"Reading Inno version from: {iss_path}")
+                ver = read_myappversion_from_iss(iss_path)
             app.github.myapp_version = ver
 
         self._save_cache()
@@ -1126,7 +1143,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.table.setItem(row, 1, QtWidgets.QTableWidgetItem(man_ver if man_ver else "—"))
         self.table.setItem(row, 2, QtWidgets.QTableWidgetItem(inst_ver if inst_ver else "—"))
         self.table.setItem(row, 3, QtWidgets.QTableWidgetItem(github_ver if github_ver else "—"))
-        self._apply_version_colors_for_row(row, man_ver, inst_ver, github_ver)
+        self._apply_version_colors_for_row(row, name, man_ver, inst_ver, github_ver)
 
         last_txt = "—"
         if last_built_iso:
@@ -1160,7 +1177,13 @@ class MainWindow(QtWidgets.QMainWindow):
         cb.setFocusPolicy(QtCore.Qt.NoFocus)  # no focus rectangle
 
         state = self._row_states.get(app_name, RowState())
-        cb.setChecked(getattr(state, field))
+        is_disabled_copy = (app_name == "SAC Offline" and field == "copy")
+        if is_disabled_copy:
+            state.copy = False
+            cb.setChecked(False)
+            cb.setEnabled(False) 
+        else:
+            cb.setChecked(getattr(state, field))
 
         cb.stateChanged.connect(
             lambda _v, a=app_name, f=field, box=cb: self._on_box_changed(a, f, box.isChecked())
@@ -1188,6 +1211,9 @@ class MainWindow(QtWidgets.QMainWindow):
     # ---------------------------
     def set_all_column(self, field: str, value: bool):
         for app_name in list(self._row_states.keys()):
+            if field == "copy" and app_name == "SAC Offline":
+                self._row_states[app_name].copy = False
+                continue
             setattr(self._row_states[app_name], field, value)
         self._repaint_checkboxes()
         self._update_selected_count()
@@ -1210,7 +1236,14 @@ class MainWindow(QtWidgets.QMainWindow):
                 cb = w.findChild(QtWidgets.QCheckBox)
                 if cb:
                     cb.blockSignals(True)
-                    cb.setChecked(getattr(st, field))
+                    is_disabled_copy = (app_name == "SAC Offline" and field == "copy")
+                    if is_disabled_copy:
+                        st.copy = False
+                        cb.setChecked(False)
+                        cb.setEnabled(False)
+                    else:
+                        cb.setEnabled(True)
+                        cb.setChecked(getattr(st, field))
                     cb.blockSignals(False)
 
     def _update_selected_count(self):
@@ -1249,8 +1282,9 @@ class MainWindow(QtWidgets.QMainWindow):
         for row in range(self.table.rowCount()):
             app_name = self.table.item(row, 0).text()
             st = self._row_states.get(app_name, RowState())
-            if st.build or st.copy or st.update_manifest:
-                plan.append((app_name, st.build, st.copy, st.update_manifest))
+            do_copy = st.copy and app_name != "SAC Offline"
+            if st.build or do_copy or st.update_manifest:
+                plan.append((app_name, st.build, do_copy, st.update_manifest))
 
         if not plan:
             self._set_status("Nothing selected.")

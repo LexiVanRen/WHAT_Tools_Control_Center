@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from ui.models import INSTALLER_NAME_OVERRIDES
 from ui.windows_version import get_file_product_version
 
 
@@ -35,8 +36,10 @@ def find_installer_for_app(installers_dir: str, app_name: str) -> Optional[Insta
     if not root.exists():
         return None
 
+    installer_base = INSTALLER_NAME_OVERRIDES.get(base, base).strip() or base
+
     # Prefer exact match first
-    exact = root / f"{base}_installer.exe"
+    exact = root / f"{installer_base}_installer.exe"
     candidates: list[Path] = []
 
     if exact.exists():
@@ -44,12 +47,11 @@ def find_installer_for_app(installers_dir: str, app_name: str) -> Optional[Insta
 
     # Also search broader patterns (in case naming differs or extension omitted somewhere)
     # Use glob for exe + non-exe (some environments keep no extension, but Windows apps are usually .exe)
-    candidates.extend(root.glob(f"{base}_installer*.exe"))
-    candidates.extend(root.glob(f"{base}_installer*"))
+    candidates.extend(root.glob(f"{installer_base}_installer*.exe"))
+    candidates.extend(root.glob(f"{installer_base}_installer*"))
 
     # Filter to files only
-    candidates = [p for p in candidates if p.is_file()]
-
+    candidates = [p for p in dict.fromkeys(candidates) if p.is_file()]
     if not candidates:
         return None
 

@@ -1,3 +1,4 @@
+import json
 import re
 from pathlib import Path
 
@@ -5,7 +6,6 @@ _VERSION_RE = re.compile(r'^\s*#define\s+MyAppVersion\s+"([^"]+)"\s*$', re.IGNOR
 
 def read_myappversion_from_iss(iss_path: str) -> str:
     p = Path(iss_path)
-    print(p)
     if not p.exists() or not p.is_file():
         return ""
     try:
@@ -16,3 +16,14 @@ def read_myappversion_from_iss(iss_path: str) -> str:
     except Exception:
         return ""
     return ""
+
+
+def read_version_from_package_json(package_json_path: str) -> str:
+    p = Path(package_json_path)
+    if not p.exists() or not p.is_file():
+        return ""
+    try:
+        data = json.loads(p.read_text(encoding="utf-8", errors="ignore"))
+        return str(data.get("version", "") or "").strip()
+    except Exception:
+        return ""

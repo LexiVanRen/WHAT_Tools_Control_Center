@@ -104,12 +104,27 @@ def newest_exe_in(folder: Path) -> Optional[Path]:
     return max(exes, key=lambda p: p.stat().st_mtime)
 
 
-def build_repo(repo_path: str, iss_path: str) -> BuildResult:
+def build_repo(repo_path: str, iss_path: str, app_name: str = "") -> BuildResult:
     repo = Path(repo_path)
     iss = Path(iss_path)
 
     if not repo.is_dir():
         return BuildResult(False, f"Repo not found: {repo}")
+
+    if app_name == "SAC Offline":
+        script = repo / "build-and-deploy.js"
+        if not script.is_file():
+            return BuildResult(False, f"SAC Offline script not found: {script}")
+        try:
+            _run(["node", str(script.name)], cwd=str(repo))
+            return BuildResult(
+                True,
+                "SAC Offline build script launched (admin prompt expected).",
+            )
+        except FileNotFoundError:
+            return BuildResult(False, "Node.js not found in PATH.")
+        except subprocess.CalledProcessError as e:
+            return BuildResult(False, f"SAC Offline build script failed: {e}")
 
     spec = _find_spec(repo)
     if not spec:
@@ -162,6 +177,15 @@ def update_manifest_from_iss(iss_path: str) -> BuildResult:
     app_name, app_version = read_inno_app_info(iss)
     if not app_name or not app_version:
         return BuildResult(False, f"Could not read MyAppName/MyAppVersion from {iss}")
+
+    return update_manifest_for_app_version(app_name, app_version)
+
+
+def update_manifest_for_app_version(app_name: str, app_version: str) -> BuildResult:
+    app_name = str(app_name or "").strip()
+    app_version = str(app_version or "").strip()
+    if not app_name or not app_version:
+        return BuildResult(False, "Missing app name or version for manifest update.")
 
     url = f"{UPDATE_MANIFEST_BASE}/{app_name}_{app_version}_y"
     try:
