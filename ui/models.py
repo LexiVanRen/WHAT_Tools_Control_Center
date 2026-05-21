@@ -17,6 +17,9 @@ LOCAL_VERSION_PACKAGE_JSON_OVERRIDES = {
 INSTALLER_NAME_OVERRIDES = {
     "SRAM Reader": "SRAMReader",
 }
+INSTALLER_EXE_OVERRIDES = {
+    "SAC Offline": r"C:\Users\ABC-RnD\Documents\GitHub\Serial\SAC_Offline\SAC_Offline_installer.exe",
+}
 # Where installers are dropped (your network drive)
 INSTALLERS_DIR = r"Z:\R&D\WHAT_installers"
 

@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from ui.models import INSTALLER_NAME_OVERRIDES
+from ui.models import INSTALLER_NAME_OVERRIDES, INSTALLER_EXE_OVERRIDES
 from ui.windows_version import get_file_product_version
 
 
@@ -31,6 +31,24 @@ def find_installer_for_app(installers_dir: str, app_name: str) -> Optional[Insta
     base = app_name.strip()
     if not base:
         return None
+
+    # App-specific explicit installer path override (e.g. SAC Offline local installer).
+    override_path = INSTALLER_EXE_OVERRIDES.get(base, "").strip()
+    if override_path:
+        override = Path(override_path)
+        if not override.is_file():
+            return None
+        mtime = datetime.fromtimestamp(override.stat().st_mtime)
+        prod_ver = ""
+        try:
+            prod_ver = get_file_product_version(str(override))
+        except Exception:
+            prod_ver = ""
+        return InstallerInfo(
+            exe_path=str(override),
+            last_built=mtime,
+            product_version=prod_ver.strip(),
+        )
 
     root = Path(installers_dir)
     if not root.exists():
