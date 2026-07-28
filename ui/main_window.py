@@ -342,8 +342,23 @@ class MainWindow(QtWidgets.QMainWindow):
     # UI
     # ---------------------------
     def _build_ui(self):
+        # Keep the complete launcher page scrollable.  The table is deliberately
+        # sized to show all rows, so the page needs to be able to grow beyond the
+        # available window height on laptops and when the window is moved between
+        # displays with different DPI settings.
+        scroll = QtWidgets.QScrollArea()
+        scroll.setObjectName("MainScrollArea")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+
         root = QtWidgets.QWidget()
-        self.setCentralWidget(root)
+        root.setObjectName("Page")
+        root.setMinimumWidth(1100)
+        scroll.setWidget(root)
+        self.setCentralWidget(scroll)
+
         layout = QtWidgets.QVBoxLayout(root)
         layout.setContentsMargins(18, 16, 18, 16)
         layout.setSpacing(12)
@@ -510,8 +525,9 @@ class MainWindow(QtWidgets.QMainWindow):
         new_app_row.addWidget(self.btn_new_app)
         new_app_row.addStretch(1)
 
-        # Keep layout nice if window is tall
-        layout.addStretch(1)
+        # Do not add an expanding spacer here.  The scroll area should preserve
+        # the page's natural height so the table, log and New App button remain
+        # laid out one after another.
 
     def _apply_style(self):
         self.setStyleSheet(

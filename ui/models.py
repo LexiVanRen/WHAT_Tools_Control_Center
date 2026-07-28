@@ -10,6 +10,7 @@ GITHUB_REPO_OVERRIDES = {
     "CAN": r"C:\Users\ABC-RnD\PycharmProjects\CAN",
     "SRAM Reader": r"C:\Users\ABC-RnD\Documents\GitHub\SRAM_Tool",
     "SAC Offline": r"C:\Users\ABC-RnD\Documents\GitHub\SAC_Offline_Tool",
+    "Profibus": r"C:\Users\ABC-RnD\Documents\GitHub\Profibus_Tool",
 }
 LOCAL_VERSION_PACKAGE_JSON_OVERRIDES = {
     "SAC Offline": r"C:\Users\ABC-RnD\Documents\GitHub\SAC_Offline_Tool\package.json",
