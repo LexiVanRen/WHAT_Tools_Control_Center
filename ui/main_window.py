@@ -20,6 +20,7 @@ from ui.cache_store import CacheStore, AppCache, CachedApp, CachedManifest, Cach
 CACHE_PATH = os.path.join(os.getenv("LOCALAPPDATA"), "WHATControlCenter", "cache")
 INSTALLER_URL = "https://rndserver-stg.abcparts.be/software_programs/"
 ICO_URL = "https://rndserver-stg.abcparts.be/abc_applauncher/static/"
+STATS_URL = "https://rndserver.abcparts.be/abc/what_tools_stats/"
 @dataclass
 class RowState:
     build: bool = False
@@ -382,27 +383,27 @@ class MainWindow(QtWidgets.QMainWindow):
         btn_box.setSpacing(10)
         header.addLayout(btn_box, 0)
 
-        self.btn_refresh_manifest = QtWidgets.QPushButton("Refresh manifest version")
+        self.btn_refresh_manifest = QtWidgets.QPushButton("🔄 Refresh manifest version")
         self.btn_refresh_manifest.setObjectName("RefreshSingleButton")
         self.btn_refresh_manifest.clicked.connect(self.refresh_manifest_all)
         btn_box.addWidget(self.btn_refresh_manifest)
 
-        self.btn_refresh_installers = QtWidgets.QPushButton("Refresh installer versions")
+        self.btn_refresh_installers = QtWidgets.QPushButton("🔄 Refresh installer versions")
         self.btn_refresh_installers.setObjectName("RefreshSingleButton")
         self.btn_refresh_installers.clicked.connect(self.refresh_installers_all)
         btn_box.addWidget(self.btn_refresh_installers)
 
-        self.btn_refresh_github = QtWidgets.QPushButton("Refresh Local versions")
+        self.btn_refresh_github = QtWidgets.QPushButton("🔄 Refresh Local versions")
         self.btn_refresh_github.setObjectName("RefreshSingleButton")
         self.btn_refresh_github.clicked.connect(self.refresh_github_all)
         btn_box.addWidget(self.btn_refresh_github)
 
-        self.btn_refresh_all = QtWidgets.QPushButton("Refresh all versions")
+        self.btn_refresh_all = QtWidgets.QPushButton("🔄 Refresh all versions")
         self.btn_refresh_all.setObjectName("RefreshAllButton")
         self.btn_refresh_all.clicked.connect(self.refresh_all)
         btn_box.addWidget(self.btn_refresh_all)
 
-        self.btn_run = QtWidgets.QPushButton("Run")
+        self.btn_run = QtWidgets.QPushButton("🚀 Run")
         self.btn_run.setObjectName("PrimaryButton")
         self.btn_run.clicked.connect(self.run_selected_stub)
         btn_box.addWidget(self.btn_run)
@@ -412,22 +413,22 @@ class MainWindow(QtWidgets.QMainWindow):
         bulk.setSpacing(10)
         layout.addLayout(bulk)
 
-        self.btn_all_build = QtWidgets.QPushButton("Select all: Build")
+        self.btn_all_build = QtWidgets.QPushButton("🔨 Select all: Build")
         self.btn_all_build.setObjectName("SelectBuild")
         self.btn_all_build.clicked.connect(lambda: self.set_all_column("build", True))
         bulk.addWidget(self.btn_all_build)
 
-        self.btn_all_copy = QtWidgets.QPushButton("Select all: Copy")
+        self.btn_all_copy = QtWidgets.QPushButton("🖨️ Select all: Copy")
         self.btn_all_copy.setObjectName("SelectCopy")
         self.btn_all_copy.clicked.connect(lambda: self.set_all_column("copy", True))
         bulk.addWidget(self.btn_all_copy)
 
-        self.btn_all_upd_manifest = QtWidgets.QPushButton("Select all: Update manifest")
+        self.btn_all_upd_manifest = QtWidgets.QPushButton("🖥️ Select all: Update manifest")
         self.btn_all_upd_manifest.setObjectName("SelectUpdateManifest")
         self.btn_all_upd_manifest.clicked.connect(lambda: self.set_all_column("update_manifest", True))
         bulk.addWidget(self.btn_all_upd_manifest)
 
-        self.btn_clear = QtWidgets.QPushButton("Clear all")
+        self.btn_clear = QtWidgets.QPushButton("🆑 Clear all")
         self.btn_clear.setObjectName("ClearAll")
         self.btn_clear.clicked.connect(self.clear_all)
         bulk.addWidget(self.btn_clear)
@@ -517,12 +518,20 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.addLayout(new_app_row)
         new_app_row.addStretch(1)
 
-        self.btn_new_app = QtWidgets.QPushButton("+ New App")
+        self.btn_new_app = QtWidgets.QPushButton("➕ New App")
         self.btn_new_app.setObjectName("NewAppButton")
         self.btn_new_app.clicked.connect(self.open_new_app_dialog)
         self.btn_new_app.setMinimumHeight(56)
         self.btn_new_app.setMinimumWidth(260)
         new_app_row.addWidget(self.btn_new_app)
+
+        self.btn_view_stats = QtWidgets.QPushButton("📊 View WHAT Tools stats")
+        self.btn_view_stats.setObjectName("ViewStatsButton")
+        self.btn_view_stats.clicked.connect(self.open_stats_page)
+        self.btn_view_stats.setMinimumHeight(56)
+        self.btn_view_stats.setMinimumWidth(180)
+        new_app_row.addWidget(self.btn_view_stats)
+
         new_app_row.addStretch(1)
 
         # Do not add an expanding spacer here.  The scroll area should preserve
@@ -607,6 +616,20 @@ class MainWindow(QtWidgets.QMainWindow):
             QPushButton#NewAppButton:hover {
                 background: #16754C;
                 border-color: #16754C;
+            }
+
+            QPushButton#ViewStatsButton {
+                background: #1f6feb;
+                border: 1px solid #808080;
+                color: white;
+                font-weight: 600;
+                font-size: 14pt;
+                padding: 14px 30px;
+                border-radius: 12px;
+            }
+            QPushButton#ViewStatsButton:hover {
+                background: #1a5fd1;
+                border-color: #1a5fd1;
             }
 
             QPushButton#SelectCopy {
@@ -768,6 +791,9 @@ class MainWindow(QtWidgets.QMainWindow):
         QtWidgets.QApplication.clipboard().setText(self.txt_log.toPlainText())
         self.lbl_status.setText("Log copied to clipboard.")
         self.log("Log copied to clipboard.")
+
+    def open_stats_page(self):
+        QtGui.QDesktopServices.openUrl(QtCore.QUrl(STATS_URL))
 
     # ---------------------------
     # Cache loading / saving
