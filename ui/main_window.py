@@ -1307,6 +1307,11 @@ class MainWindow(QtWidgets.QMainWindow):
             return
 
         self._set_status("Running selected actions…")
+
+        
+        # SAC Offline must run first. Keep the order of every other selected
+        plan.sort(key=lambda item: item[0] != "SAC Offline")
+
         self.btn_run.setEnabled(False)
 
         app_map = {a.name: a for a in self.cache.apps}
