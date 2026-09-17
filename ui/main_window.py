@@ -18,9 +18,10 @@ from ui.build_ops import BuildResult, build_repo, copy_installer, update_manifes
 from ui.cache_store import CacheStore, AppCache, CachedApp, CachedManifest, CachedInstaller, CachedGithub, default_cache
 
 CACHE_PATH = os.path.join(os.getenv("LOCALAPPDATA"), "WHATControlCenter", "cache")
-INSTALLER_URL = "https://rndserver-stg.abcparts.be/software_programs/"
-ICO_URL = "https://rndserver-stg.abcparts.be/abc_applauncher/static/"
-STATS_URL = "https://rndserver.abcparts.be/abc/what_tools_stats/"
+SERVER = "https://rndserver-stg.abcparts.be"
+INSTALLER_URL = f"{SERVER}/software_programs/"
+ICO_URL = f"{SERVER}/abc_applauncher/static/"
+STATS_URL =f"{SERVER}/what_tools_stats/"
 @dataclass
 class RowState:
     build: bool = False
