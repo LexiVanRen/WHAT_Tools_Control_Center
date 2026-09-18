@@ -2,7 +2,6 @@ from dataclasses import dataclass
 from typing import Any
 
 
-MANIFEST_URL = "https://rndserver-stg.abcparts.be/abc_applauncher/manifest.json"
 GITHUB_ROOT = r"C:\Users\ABC-RnD\Documents\GitHub"
 WHAT_REPO_FOLDER = "Applauncher"
 INNO_ISS_RELATIVE = "inno_setup_script_for_making_installer.iss"

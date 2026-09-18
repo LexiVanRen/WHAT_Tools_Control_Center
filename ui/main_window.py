@@ -8,7 +8,7 @@ from typing import Optional
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from ui.models import MANIFEST_URL, INSTALLERS_DIR, GITHUB_ROOT, WHAT_REPO_FOLDER, INNO_ISS_RELATIVE, \
+from ui.models import INSTALLERS_DIR, GITHUB_ROOT, WHAT_REPO_FOLDER, INNO_ISS_RELATIVE, \
     GITHUB_REPO_OVERRIDES, LOCAL_VERSION_PACKAGE_JSON_OVERRIDES, ManifestData
 
 from ui.manifest_client import fetch_manifest
@@ -16,12 +16,15 @@ from ui.installer_scan import find_installer_for_app, InstallerInfo
 from ui.inno_version import read_myappversion_from_iss, read_version_from_package_json
 from ui.build_ops import BuildResult, build_repo, copy_installer, update_manifest_from_iss, update_manifest_for_app_version, add_app_to_manifest
 from ui.cache_store import CacheStore, AppCache, CachedApp, CachedManifest, CachedInstaller, CachedGithub, default_cache
+from ui.server_config import (
+    DEFAULT_SERVER_ENVIRONMENT,
+    get_manifest_url,
+    get_server_base_url,
+    load_server_environment,
+    save_server_environment,
+)
 
 CACHE_PATH = os.path.join(os.getenv("LOCALAPPDATA"), "WHATControlCenter", "cache")
-SERVER = "https://rndserver-stg.abcparts.be"
-INSTALLER_URL = f"{SERVER}/software_programs/"
-ICO_URL = f"{SERVER}/abc_applauncher/static/"
-STATS_URL =f"{SERVER}/what_tools_stats/"
 @dataclass
 class RowState:
     build: bool = False
@@ -91,11 +94,18 @@ class RunPlanWorker(QtCore.QObject):
     step = QtCore.Signal(str)
     finished = QtCore.Signal()
 
-    def __init__(self, plan: list[tuple[str, bool, bool, bool]], app_map: dict[str, CachedApp], installers_dir: str):
+    def __init__(
+        self,
+        plan: list[tuple[str, bool, bool, bool]],
+        app_map: dict[str, CachedApp],
+        installers_dir: str,
+        server_base_url: str,
+    ):
         super().__init__()
         self.plan = plan
         self.app_map = app_map
         self.installers_dir = installers_dir
+        self.server_base_url = server_base_url
 
     def _find_local_output_installer(self, app: CachedApp) -> str:
         repo_path = getattr(app.github, "repo_path", "") or ""
@@ -168,9 +178,9 @@ class RunPlanWorker(QtCore.QObject):
                     if not app_version:
                         r = BuildResult(False, f"Could not read version from {package_json_path}")
                     else:
-                        r = update_manifest_for_app_version(app_name, app_version)
+                        r = update_manifest_for_app_version(app_name, app_version, self.server_base_url)
                 else:
-                    r = update_manifest_from_iss(app.github.inno_iss_path)
+                    r = update_manifest_from_iss(app.github.inno_iss_path, self.server_base_url)
                 self.step.emit(f"{app_name}: {r.message}")
 
         self.finished.emit()
@@ -179,10 +189,14 @@ class RunPlanWorker(QtCore.QObject):
 class ManifestWorker(QtCore.QObject):
     finished = QtCore.Signal(object, object)
 
+    def __init__(self, manifest_url: str):
+        super().__init__()
+        self.manifest_url = manifest_url
+
     @QtCore.Slot()
     def run(self):
         try:
-            m = fetch_manifest(MANIFEST_URL, timeout_s=8.0)
+            m = fetch_manifest(self.manifest_url, timeout_s=8.0)
             self.finished.emit(m, None)
         except Exception as e:
             self.finished.emit(None, str(e))
@@ -205,8 +219,9 @@ class InstallerSingleWorker(QtCore.QObject):
 
 
 class NewAppDialog(QtWidgets.QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, server_base_url: str, parent=None):
         super().__init__(parent)
+        self.server_base_url = server_base_url.rstrip("/")
         self.setWindowTitle("Add New App")
         self.resize(650, 420)
 
@@ -271,7 +286,10 @@ class NewAppDialog(QtWidgets.QDialog):
             self.info_text.setText("Tool")
 
         if not self._icon_dirty:
-            self.icon.setText(f"{ICO_URL}{app_slug.lower()}.ico" if app_slug else "")
+            self.icon.setText(
+                f"{self.server_base_url}/abc_applauncher/static/{app_slug.lower()}.ico"
+                if app_slug else ""
+            )
 
         if not self._registry_dirty: 
             self.registry_name.setText(app_slug)
@@ -279,7 +297,7 @@ class NewAppDialog(QtWidgets.QDialog):
         if not self._installer_url_dirty:
             if app_slug:
                 self.installer_url.setText(
-                    f"{INSTALLER_URL}{app_slug}_installer.exe"
+                    f"{self.server_base_url}/software_programs/{app_slug}_installer.exe"
                 )
             else:
                 self.installer_url.setText("") 
@@ -326,8 +344,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setWindowTitle("Build Launcher")
         self.resize(1280, 760)
 
+        self.server_environment = load_server_environment()
+        self.server_base_url = get_server_base_url(self.server_environment)
+        self.manifest_url = get_manifest_url(self.server_environment)
+
         self.cache_store = CacheStore(CACHE_PATH)
-        self.cache: AppCache = default_cache(MANIFEST_URL, INSTALLERS_DIR)
+        self.cache: AppCache = default_cache(self.manifest_url, INSTALLERS_DIR)
 
         self._manifest: Optional[ManifestData] = None
         self._row_states: dict[str, RowState] = {}
@@ -383,6 +405,21 @@ class MainWindow(QtWidgets.QMainWindow):
         btn_box = QtWidgets.QHBoxLayout()
         btn_box.setSpacing(10)
         header.addLayout(btn_box, 0)
+
+        server_label = QtWidgets.QLabel("Server:")
+        server_label.setObjectName("Subtitle")
+        btn_box.addWidget(server_label)
+
+        self.cmb_server_environment = QtWidgets.QComboBox()
+        self.cmb_server_environment.setObjectName("ServerEnvironment")
+        self.cmb_server_environment.addItem("Staging", "staging")
+        self.cmb_server_environment.addItem("Production", "production")
+        self.cmb_server_environment.setCurrentIndex(
+            self.cmb_server_environment.findData(self.server_environment)
+        )
+        self.cmb_server_environment.setToolTip("Choose which server the application uses")
+        self.cmb_server_environment.currentIndexChanged.connect(self._on_server_environment_changed)
+        btn_box.addWidget(self.cmb_server_environment)
 
         self.btn_refresh_manifest = QtWidgets.QPushButton("🔄 Refresh manifest version")
         self.btn_refresh_manifest.setObjectName("RefreshSingleButton")
@@ -794,7 +831,21 @@ class MainWindow(QtWidgets.QMainWindow):
         self.log("Log copied to clipboard.")
 
     def open_stats_page(self):
-        QtGui.QDesktopServices.openUrl(QtCore.QUrl(STATS_URL))
+        stats_url = f"{self.server_base_url}/what_tools_stats/"
+        QtGui.QDesktopServices.openUrl(QtCore.QUrl(stats_url))
+
+    @QtCore.Slot(int)
+    def _on_server_environment_changed(self, _index: int):
+        selected = str(self.cmb_server_environment.currentData() or DEFAULT_SERVER_ENVIRONMENT)
+        if selected == self.server_environment:
+            return
+
+        self.server_environment = selected
+        self.server_base_url = get_server_base_url(selected)
+        self.manifest_url = get_manifest_url(selected)
+        save_server_environment(selected)
+        self._set_status(f"Switched to {selected.title()} server. Refreshing manifest...")
+        self.refresh_manifest_all()
 
     # ---------------------------
     # Cache loading / saving
@@ -838,14 +889,14 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.information(self, "Busy", "Wait for Refresh all to complete first.")
             return
 
-        dlg = NewAppDialog(self)
+        dlg = NewAppDialog(self.server_base_url, self)
         if dlg.exec() != QtWidgets.QDialog.Accepted:
             return
 
         payload = dlg.payload()
         app_name = str(payload.get("app_name", "")).strip()
         self._set_status(f"Creating new app: {app_name}")
-        result = add_app_to_manifest(payload)
+        result = add_app_to_manifest(payload, self.server_base_url)
         self._set_status(result.message)
 
         if not result.ok:
@@ -1006,9 +1057,10 @@ class MainWindow(QtWidgets.QMainWindow):
     def refresh_manifest_all(self):
         self._set_status("Fetching manifest…")
         self.btn_refresh_manifest.setEnabled(False)
+        self.cmb_server_environment.setEnabled(False)
 
         self._m_thread = QtCore.QThread(self)
-        self._m_worker = ManifestWorker()
+        self._m_worker = ManifestWorker(self.manifest_url)
         self._m_worker.moveToThread(self._m_thread)
 
         self._m_thread.started.connect(self._m_worker.run)
@@ -1024,6 +1076,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.btn_refresh_manifest.setEnabled(True)
 
         if error:
+            self.cmb_server_environment.setEnabled(True)
             if self._refresh_all_in_progress:
                 self._refresh_all_in_progress = False
                 self.btn_refresh_all.setEnabled(True)
@@ -1053,7 +1106,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.cache = AppCache(
             schema=1,
             updated_at_utc=self.cache.updated_at_utc,
-            source_manifest_url=MANIFEST_URL,
+            source_manifest_url=self.manifest_url,
             installers_dir=INSTALLERS_DIR,
             apps=new_apps,
         )
@@ -1065,8 +1118,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self._set_status("Manifest refreshed + cached.")
 
         if self._refresh_all_in_progress:
+            self.cmb_server_environment.setEnabled(False)
             self._set_status("Refresh all: refreshing installer versions...")
             self.refresh_installers_all()
+        else:
+            self.cmb_server_environment.setEnabled(True)
 
     def _compute_github_paths(self, app_name: str) -> tuple[str, str]:
         # 1) explicit overrides win
@@ -1122,6 +1178,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _refresh_next_installer(self):
         if not getattr(self, "_install_queue", None):
+            self.cmb_server_environment.setEnabled(True)
             self._save_cache()
             self._populate_table_from_cache()
             if self._refresh_all_in_progress:
@@ -1340,11 +1397,12 @@ class MainWindow(QtWidgets.QMainWindow):
         plan.sort(key=lambda item: item[0] != "SAC Offline")
 
         self.btn_run.setEnabled(False)
+        self.cmb_server_environment.setEnabled(False)
 
         app_map = {a.name: a for a in self.cache.apps}
 
         self._run_thread = QtCore.QThread(self)
-        self._run_worker = RunPlanWorker(plan, app_map, INSTALLERS_DIR)
+        self._run_worker = RunPlanWorker(plan, app_map, INSTALLERS_DIR, self.server_base_url)
         self._run_worker.moveToThread(self._run_thread)
 
         self._run_thread.started.connect(self._run_worker.run)

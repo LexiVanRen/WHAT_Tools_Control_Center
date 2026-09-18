@@ -13,9 +13,6 @@ from typing import Optional
 import requests
 
 INNO_COMPILER = r"C:\Program Files (x86)\Inno Setup 5\ISCC.exe"
-SERVER = "https://rndserver-stg.abcparts.be"
-UPDATE_MANIFEST_BASE = f"{SERVER}/api/update_manifest"
-ADD_APP_TO_MANIFEST_URL = f"{SERVER}/api/add_app_to_manifest"
 
 
 @dataclass(frozen=True)
@@ -172,22 +169,22 @@ def copy_installer(installer_exe: str, installers_dir: str) -> BuildResult:
     return BuildResult(True, f"Copied to {dst}", latest_installer=str(dst))
 
 
-def update_manifest_from_iss(iss_path: str) -> BuildResult:
+def update_manifest_from_iss(iss_path: str, server_base_url: str) -> BuildResult:
     iss = Path(iss_path)
     app_name, app_version = read_inno_app_info(iss)
     if not app_name or not app_version:
         return BuildResult(False, f"Could not read MyAppName/MyAppVersion from {iss}")
 
-    return update_manifest_for_app_version(app_name, app_version)
+    return update_manifest_for_app_version(app_name, app_version, server_base_url)
 
 
-def update_manifest_for_app_version(app_name: str, app_version: str) -> BuildResult:
+def update_manifest_for_app_version(app_name: str, app_version: str, server_base_url: str) -> BuildResult:
     app_name = str(app_name or "").strip()
     app_version = str(app_version or "").strip()
     if not app_name or not app_version:
         return BuildResult(False, "Missing app name or version for manifest update.")
 
-    url = f"{UPDATE_MANIFEST_BASE}/{app_name}_{app_version}_y"
+    url = f"{server_base_url.rstrip('/')}/api/update_manifest/{app_name}_{app_version}_y"
     try:
         resp = requests.patch(url, json={}, timeout=10)
         if resp.status_code == 200:
@@ -197,9 +194,10 @@ def update_manifest_for_app_version(app_name: str, app_version: str) -> BuildRes
         return BuildResult(False, f"Manifest update error: {e}")
 
 
-def add_app_to_manifest(payload: dict) -> BuildResult:
+def add_app_to_manifest(payload: dict, server_base_url: str) -> BuildResult:
     try:
-        resp = requests.post(ADD_APP_TO_MANIFEST_URL, json=payload, timeout=12)
+        url = f"{server_base_url.rstrip('/')}/api/add_app_to_manifest"
+        resp = requests.post(url, json=payload, timeout=12)
         if resp.status_code in (200, 201):
             return BuildResult(True, "New app added to manifest.")
 
