@@ -14,6 +14,7 @@ from ui.models import INSTALLERS_DIR, GITHUB_ROOT, WHAT_REPO_FOLDER, INNO_ISS_RE
 from ui.manifest_client import fetch_manifest
 from ui.installer_scan import find_installer_for_app, InstallerInfo
 from ui.inno_version import read_myappversion_from_iss, read_version_from_package_json
+from ui.patch_notes import latest_patch_notes
 from ui.build_ops import BuildResult, build_repo, copy_installer, update_manifest_from_iss, update_manifest_for_app_version, add_app_to_manifest
 from ui.cache_store import CacheStore, AppCache, CachedApp, CachedManifest, CachedInstaller, CachedGithub, default_cache
 from ui.server_config import (
@@ -89,6 +90,49 @@ class ElideWrapDelegate(QtWidgets.QStyledItemDelegate):
         self.initStyleOption(opt, index)
         fm = opt.fontMetrics
         return QtCore.QSize(opt.rect.width(), self.max_lines * fm.height() + 10)
+
+
+class PatchNotesDelegate(QtWidgets.QStyledItemDelegate):
+    """Draw each patch note on its own wrapped line."""
+
+    @staticmethod
+    def note_height(font_metrics, width: int, note: str) -> int:
+        flags = QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop | QtCore.Qt.TextWordWrap
+        return font_metrics.boundingRect(
+            0, 0, max(1, width), 10000, flags, f"• {note}"
+        ).height()
+
+    @classmethod
+    def row_height(cls, font_metrics, width: int, notes: list[str]) -> int:
+        if not notes:
+            return 56
+        text_height = sum(cls.note_height(font_metrics, width, note) for note in notes)
+        return max(56, text_height + 4 * (len(notes) - 1) + 14)
+
+    def paint(self, painter, option, index):
+        painter.save()
+        opt = QtWidgets.QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        opt.text = ""
+        style = opt.widget.style() if opt.widget else QtWidgets.QApplication.style()
+        style.drawControl(QtWidgets.QStyle.CE_ItemViewItem, opt, painter, opt.widget)
+
+        notes = index.data(QtCore.Qt.UserRole) or []
+        rect = option.rect.adjusted(8, 7, -8, -7)
+        painter.setPen(opt.palette.color(QtGui.QPalette.Text))
+        flags = QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop | QtCore.Qt.TextWordWrap
+        if not notes:
+            painter.drawText(rect, flags, "—")
+        else:
+            y = rect.top()
+            for note in notes:
+                height = self.note_height(opt.fontMetrics, rect.width(), note)
+                painter.drawText(
+                    QtCore.QRect(rect.left(), y, rect.width(), height),
+                    flags, f"• {note}",
+                )
+                y += height + 4
+        painter.restore()
 
 class RunPlanWorker(QtCore.QObject):
     step = QtCore.Signal(str)
@@ -478,7 +522,7 @@ class MainWindow(QtWidgets.QMainWindow):
         bulk.addWidget(self.lbl_status)
 
         # Table
-        self.table = QtWidgets.QTableWidget(0, 9)
+        self.table = QtWidgets.QTableWidget(0, 10)
         self.table.setObjectName("AppsTable")
         self.table.setHorizontalHeaderLabels(
             [
@@ -487,6 +531,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 "Z drive installer version",
                 "Local version",
                 "Last built",
+                "Patch Notes",
                 "Description",
                 "Build",
                 "Copy to Z",
@@ -497,23 +542,27 @@ class MainWindow(QtWidgets.QMainWindow):
         self.table.setAlternatingRowColors(True)
         self.table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
 
-        # No internal scrollbars (we fit the table height to contents)
+        # Show every row; allow horizontal scrolling for the wide set of columns.
         self.table.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
-        self.table.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        self.table.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
 
         # No selection highlighting (prevents ugly blocks on checkbox columns)
         self.table.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
         self.table.setFocusPolicy(QtCore.Qt.NoFocus)
 
-        # Compact description rendering
-        self.table.setWordWrap(False)
-        self.table.setItemDelegateForColumn(5, ElideWrapDelegate(self.table, max_lines=2))
+        # Keep descriptions compact while allowing patch notes to wrap fully.
+        self.table.setWordWrap(True)
+        self.table.setItemDelegateForColumn(5, PatchNotesDelegate(self.table))
+        self.table.setItemDelegateForColumn(6, ElideWrapDelegate(self.table, max_lines=2))
         self.table.verticalHeader().setDefaultSectionSize(56)
 
         h = self.table.horizontalHeader()
         h.setStretchLastSection(False)
-        h.setSectionResizeMode(5, QtWidgets.QHeaderView.Stretch)  # Description
-        for col in (0, 1, 2, 3, 4, 6, 7, 8):
+        h.setSectionResizeMode(5, QtWidgets.QHeaderView.Fixed)
+        self.table.setColumnWidth(5, 520)  # Patch Notes
+        h.setSectionResizeMode(6, QtWidgets.QHeaderView.Fixed)
+        self.table.setColumnWidth(6, 220)  # Description
+        for col in (0, 1, 2, 3, 4, 7, 8, 9):
             h.setSectionResizeMode(col, QtWidgets.QHeaderView.ResizeToContents)
 
         layout.addWidget(self.table, 0)
@@ -911,6 +960,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._row_states = {a.name: self._row_states.get(a.name, RowState()) for a in self.cache.apps}
 
         for app in self.cache.apps:
+            repo_path, _ = self._compute_github_paths(app.name)
+            _, patch_notes = latest_patch_notes(repo_path)
             self._insert_row(
                 app.name,
                 app.manifest.version,
@@ -918,6 +969,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 app.github.myapp_version,
                 app.installer.last_built_iso,
                 app.manifest.description,
+                patch_notes,
             )
 
         self._fit_table_to_contents_no_scroll()
@@ -929,7 +981,8 @@ class MainWindow(QtWidgets.QMainWindow):
         rows_h = 0
         for r in range(self.table.rowCount()):
             rows_h += self.table.rowHeight(r)
-        total_h = header_h + rows_h + frame
+        scroll_h = self.table.horizontalScrollBar().sizeHint().height()
+        total_h = header_h + rows_h + frame + scroll_h
         self.table.setMinimumHeight(total_h)
         self.table.setMaximumHeight(total_h)
 
@@ -1232,7 +1285,10 @@ class MainWindow(QtWidgets.QMainWindow):
     # ---------------------------
     # Table helpers
     # ---------------------------
-    def _insert_row(self, name: str, man_ver: str, inst_ver: str, github_ver: str, last_built_iso: str, desc: str):
+    def _insert_row(
+        self, name: str, man_ver: str, inst_ver: str, github_ver: str,
+        last_built_iso: str, desc: str, patch_notes: list[str],
+    ):
         row = self.table.rowCount()
         self.table.insertRow(row)
 
@@ -1256,20 +1312,31 @@ class MainWindow(QtWidgets.QMainWindow):
 
         desc_item = QtWidgets.QTableWidgetItem(desc or "")
         desc_item.setToolTip(desc or "")
-        self.table.setItem(row, 5, desc_item)
+        self.table.setItem(row, 6, desc_item)
+
+        patch_text = "\n".join(f"• {note}" for note in patch_notes) if patch_notes else "—"
+        patch_item = QtWidgets.QTableWidgetItem(patch_text)
+        patch_item.setTextAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
+        patch_item.setToolTip(patch_text if patch_notes else "No patch notes found in GUI.py")
+        patch_item.setData(QtCore.Qt.UserRole, patch_notes)
+        self.table.setItem(row, 5, patch_item)
+        text_width = self.table.columnWidth(5) - 16
+        self.table.setRowHeight(
+            row, PatchNotesDelegate.row_height(self.table.fontMetrics(), text_width, patch_notes)
+        )
 
         gh_newer_than_inst = (self._cmp_ver(github_ver, inst_ver) > 0)
         inst_ge_manifest = (self._cmp_ver(inst_ver, man_ver) > 0) or gh_newer_than_inst
 
         # Create checkboxes first
-        self._set_checkbox(row, 6, name, "build")
-        self._set_checkbox(row, 7, name, "copy")
-        self._set_checkbox(row, 8, name, "update_manifest")
+        self._set_checkbox(row, 7, name, "build")
+        self._set_checkbox(row, 8, name, "copy")
+        self._set_checkbox(row, 9, name, "update_manifest")
 
         # Then apply tints to their wrapper widgets
-        self._tint_checkbox_cell(row, 6, gh_newer_than_inst, "build")
-        self._tint_checkbox_cell(row, 7, gh_newer_than_inst, "copy")
-        self._tint_checkbox_cell(row, 8, inst_ge_manifest, "manifest")
+        self._tint_checkbox_cell(row, 7, gh_newer_than_inst, "build")
+        self._tint_checkbox_cell(row, 8, gh_newer_than_inst, "copy")
+        self._tint_checkbox_cell(row, 9, inst_ge_manifest, "manifest")
 
     def _set_checkbox(self, row: int, col: int, app_name: str, field: str):
         cb = QtWidgets.QCheckBox()
@@ -1329,7 +1396,7 @@ class MainWindow(QtWidgets.QMainWindow):
             app_name = self.table.item(row, 0).text()
             st = self._row_states.get(app_name, RowState())
 
-            for col, field in [(6, "build"), (7, "copy"), (8, "update_manifest")]:
+            for col, field in [(7, "build"), (8, "copy"), (9, "update_manifest")]:
                 w = self.table.cellWidget(row, col)
                 if not w:
                     continue
