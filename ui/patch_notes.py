@@ -8,8 +8,15 @@ from pathlib import Path
 
 
 def latest_patch_notes(repo_path: str) -> tuple[str, list[str]]:
-    """Read the highest-version patch entry in a repository's GUI.py."""
+    """Read the highest-version patch entry from a repository's patch-note source."""
     gui_path = Path(repo_path) / "GUI.py"
+    html_path = Path(repo_path) / "startupscreen.html"
+    if html_path.is_file():
+        html_version, html_notes = _latest_html_patch_notes(html_path)
+        if html_version:
+            return html_version, html_notes
+    if not gui_path.is_file():
+        return "", []
     try:
         with tokenize.open(gui_path) as source:
             lines = source.readlines()
@@ -94,3 +101,41 @@ def latest_patch_notes(repo_path: str) -> tuple[str, list[str]]:
                 latest_version, latest_key, latest_patches = version, key, notes
 
     return latest_version, latest_patches
+
+
+def _latest_html_patch_notes(html_path: Path) -> tuple[str, list[str]]:
+    """Read addPatch(version, [...]) entries from SAC Offline's startup page."""
+    try:
+        source = html_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return "", []
+
+    start = re.search(r"function\s+seedPatchNotes\s*\(\s*\)\s*\{", source)
+    if not start:
+        return "", []
+    end = source.find("function renderPatchNotes", start.end())
+    body = source[start.end():end if end >= 0 else len(source)]
+    # Remove line comments first so the old commented-out seed entries cannot win.
+    body = re.sub(r"(?m)^\s*//.*$", "", body)
+
+    latest_version = ""
+    latest_key: tuple[int, ...] = ()
+    latest_notes: list[str] = []
+    call_pattern = re.compile(
+        r"addPatch\(\s*(['\"])(\d+(?:\.\d+)*)\1\s*,\s*\[(.*?)\]\s*\)",
+        re.S,
+    )
+    for match in call_pattern.finditer(body):
+        notes = []
+        for literal in re.findall(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'', match.group(3)):
+            try:
+                value = ast.literal_eval(literal)
+            except (ValueError, SyntaxError):
+                continue
+            if isinstance(value, str) and value.strip():
+                notes.append(value.strip())
+        key = tuple(int(part) for part in match.group(2).split("."))
+        if notes and key >= latest_key:
+            latest_version, latest_key, latest_notes = match.group(2), key, notes
+
+    return latest_version, latest_notes

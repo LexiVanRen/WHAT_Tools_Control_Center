@@ -560,8 +560,9 @@ class MainWindow(QtWidgets.QMainWindow):
         h.setStretchLastSection(False)
         h.setSectionResizeMode(5, QtWidgets.QHeaderView.Fixed)
         self.table.setColumnWidth(5, 520)  # Patch Notes
-        h.setSectionResizeMode(6, QtWidgets.QHeaderView.Fixed)
-        self.table.setColumnWidth(6, 220)  # Description
+        # Let Description absorb any spare viewport width so it doesn't look
+        # like the table has an extra empty column on the right.
+        h.setSectionResizeMode(6, QtWidgets.QHeaderView.Stretch)
         for col in (0, 1, 2, 3, 4, 7, 8, 9):
             h.setSectionResizeMode(col, QtWidgets.QHeaderView.ResizeToContents)
 
