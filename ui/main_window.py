@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 from dataclasses import dataclass
 from datetime import datetime
@@ -381,6 +382,262 @@ class NewAppDialog(QtWidgets.QDialog):
             "info_text": self.info_text.text().strip(),
             "registry_name": self.registry_name.text().strip(),
         }
+
+
+class AuditMarkdownView(QtWidgets.QTextBrowser):
+    """Markdown viewer that grows with its content inside the report scroll area."""
+
+    def __init__(self, markdown: str, parent=None):
+        super().__init__(parent)
+        self.setOpenExternalLinks(True)
+        self.setFrameShape(QtWidgets.QFrame.NoFrame)
+        self.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        self.setStyleSheet("background: transparent; border: none;")
+        self.setMarkdown(markdown)
+        self.document().documentLayout().documentSizeChanged.connect(self._fit_content)
+        self._fit_content()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._fit_content()
+
+    def _fit_content(self, *_args):
+        width = max(120, self.viewport().width())
+        self.document().setTextWidth(width)
+        self.setMinimumHeight(max(42, int(self.document().documentLayout().documentSize().height()) + 12))
+
+
+class AuditFindingCard(QtWidgets.QFrame):
+    PRIORITY_COLORS = {
+        "P1": ("#fee2e2", "#b91c1c"),
+        "P2": ("#ffedd5", "#c2410c"),
+        "P3": ("#dbeafe", "#1d4ed8"),
+    }
+    SEVERITY_COLORS = {
+        "High": ("#fee2e2", "#b91c1c"),
+        "Medium": ("#fef3c7", "#a16207"),
+        "Low": ("#dcfce7", "#15803d"),
+    }
+    CONFIDENCE_COLORS = {
+        "High": ("#dcfce7", "#15803d"),
+        "Medium": ("#dbeafe", "#1d4ed8"),
+        "Low": ("#f1f5f9", "#475569"),
+    }
+
+    def __init__(self, title: str, body: str, metadata: tuple[str, str, str], prompt: str, parent=None):
+        super().__init__(parent)
+        self.setObjectName("AuditFindingCard")
+        self.setStyleSheet("""
+            QFrame#AuditFindingCard { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 14px; }
+            QLabel { background: transparent; }
+            QLabel#FindingTitle { background: transparent; color: #0f172a; font-size: 15pt; font-weight: 700; }
+            QLabel#FindingSection { background: transparent; color: #64748b; font-size: 9pt; font-weight: 700; }
+            QLabel#FindingBadge { border-radius: 10px; padding: 4px 9px; font-size: 9pt; font-weight: 700; }
+            QPushButton#CopyPrompt { color: #ffffff; background: #2563eb; border: 0; border-radius: 8px; padding: 8px 12px; font-weight: 700; }
+            QPushButton#CopyPrompt:hover { background: #1d4ed8; }
+        """)
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(10)
+
+        title_row = QtWidgets.QHBoxLayout()
+        title_box = QtWidgets.QVBoxLayout()
+        heading = QtWidgets.QLabel(title)
+        heading.setObjectName("FindingTitle")
+        heading.setWordWrap(True)
+        title_box.addWidget(heading)
+        section_label = QtWidgets.QLabel("AUDIT FINDING")
+        section_label.setObjectName("FindingSection")
+        title_box.addWidget(section_label)
+        title_row.addLayout(title_box, 1)
+
+        chips = QtWidgets.QHBoxLayout()
+        chips.setSpacing(6)
+        names = ("Priority", "Severity", "Confidence")
+        color_sets = (self.PRIORITY_COLORS, self.SEVERITY_COLORS, self.CONFIDENCE_COLORS)
+        for name, value, colors in zip(names, metadata, color_sets):
+            if not value:
+                continue
+            background, foreground = colors.get(value, ("#f1f5f9", "#475569"))
+            chip = QtWidgets.QLabel(f"{name}  {value}")
+            chip.setObjectName("FindingBadge")
+            chip.setStyleSheet(f"background: {background}; color: {foreground};")
+            chips.addWidget(chip)
+        title_row.addLayout(chips)
+        layout.addLayout(title_row)
+
+        divider = QtWidgets.QFrame()
+        divider.setFrameShape(QtWidgets.QFrame.HLine)
+        divider.setStyleSheet("color: #e2e8f0;")
+        layout.addWidget(divider)
+
+        details = AuditMarkdownView(body, self)
+        layout.addWidget(details)
+
+        if prompt:
+            prompt_row = QtWidgets.QHBoxLayout()
+            prompt_title = QtWidgets.QLabel("FIX PROMPT")
+            prompt_title.setStyleSheet("background: transparent; color: #334155; font-size: 9pt; font-weight: 700; letter-spacing: 1px;")
+            prompt_row.addWidget(prompt_title, 1)
+            copy_button = QtWidgets.QPushButton("⧉  Copy prompt")
+            copy_button.setObjectName("CopyPrompt")
+            copy_button.setCursor(QtCore.Qt.PointingHandCursor)
+            copy_button.clicked.connect(lambda: self._copy_prompt(prompt, copy_button))
+            prompt_row.addWidget(copy_button)
+            layout.addLayout(prompt_row)
+
+            prompt_panel = QtWidgets.QFrame()
+            prompt_panel.setStyleSheet("QFrame { background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 9px; }")
+            prompt_panel_layout = QtWidgets.QVBoxLayout(prompt_panel)
+            prompt_panel_layout.setContentsMargins(12, 9, 12, 9)
+            prompt_text = QtWidgets.QLabel(prompt)
+            prompt_text.setWordWrap(True)
+            prompt_text.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+            prompt_text.setStyleSheet("background: transparent; color: #334155; font-size: 9.5pt;")
+            prompt_panel_layout.addWidget(prompt_text)
+            layout.addWidget(prompt_panel)
+
+    @staticmethod
+    def _copy_prompt(prompt: str, button: QtWidgets.QPushButton):
+        QtWidgets.QApplication.clipboard().setText(prompt)
+        button.setText("✓  Copied")
+
+
+class AuditReportDialog(QtWidgets.QDialog):
+    def __init__(self, app_name: str, markdown: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Performance audit — {app_name}")
+        self.setAttribute(QtCore.Qt.WA_DeleteOnClose)
+        self.resize(1120, 820)
+        self.setMinimumSize(760, 600)
+        self.setStyleSheet("QDialog { background: #f1f5f9; color: #0f172a; }")
+
+        report_sections = self._split_sections(markdown)
+        findings_text = report_sections.pop("Findings", "")
+        finding_items = self._split_findings(findings_text)
+
+        root = QtWidgets.QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        header = QtWidgets.QFrame()
+        header.setStyleSheet("background: #0f172a; color: white;")
+        header_layout = QtWidgets.QVBoxLayout(header)
+        header_layout.setContentsMargins(26, 22, 26, 20)
+        header_layout.setSpacing(4)
+        eyebrow = QtWidgets.QLabel("WHAT TOOLS CONTROL CENTER  /  PERFORMANCE")
+        eyebrow.setStyleSheet("color: #93c5fd; font-size: 9pt; font-weight: 700; letter-spacing: 1px;")
+        header_layout.addWidget(eyebrow)
+        title = QtWidgets.QLabel(f"{app_name} audit")
+        title.setStyleSheet("font-size: 22pt; font-weight: 700;")
+        header_layout.addWidget(title)
+        subtitle = QtWidgets.QLabel("Findings, evidence, and next steps in one place")
+        subtitle.setStyleSheet("color: #cbd5e1; font-size: 10pt;")
+        header_layout.addWidget(subtitle)
+        root.addWidget(header)
+
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        scroll.setStyleSheet("QScrollArea { background: #f1f5f9; }")
+        content = QtWidgets.QWidget()
+        content_layout = QtWidgets.QVBoxLayout(content)
+        content_layout.setContentsMargins(24, 20, 24, 26)
+        content_layout.setSpacing(14)
+
+        overview = report_sections.pop("Overall assessment", "")
+        if overview:
+            self._add_section(content_layout, "Overview", overview, "#dbeafe", "#1d4ed8")
+        details = report_sections.pop("Audit details", "")
+        if details:
+            self._add_section(content_layout, "Audit details", details)
+
+        findings_header = QtWidgets.QHBoxLayout()
+        findings_title = QtWidgets.QLabel("Findings")
+        findings_title.setStyleSheet("font-size: 17pt; font-weight: 700; color: #0f172a;")
+        findings_header.addWidget(findings_title)
+        findings_header.addStretch(1)
+        count_chip = QtWidgets.QLabel(f"{len(finding_items)}  {'FINDING' if len(finding_items) == 1 else 'FINDINGS'}")
+        count_chip.setStyleSheet("background: #e2e8f0; color: #334155; border-radius: 10px; padding: 5px 10px; font-weight: 700; font-size: 9pt;")
+        findings_header.addWidget(count_chip)
+        content_layout.addLayout(findings_header)
+
+        if finding_items:
+            for title_text, body, metadata, prompt in finding_items:
+                content_layout.addWidget(AuditFindingCard(title_text, body, metadata, prompt, content))
+        else:
+            self._add_section(content_layout, "No structured findings", findings_text or "No findings were listed in this report.")
+
+        # Keep the remaining coverage, measurement, and limitation sections available below the cards.
+        for section_title, section_body in report_sections.items():
+            if section_title:
+                self._add_section(content_layout, section_title, section_body)
+        content_layout.addStretch(1)
+        scroll.setWidget(content)
+        root.addWidget(scroll, 1)
+
+    @staticmethod
+    def _split_sections(markdown: str) -> dict[str, str]:
+        matches = list(re.finditer(r"(?m)^##\s+(.+?)\s*$", markdown))
+        sections: dict[str, str] = {}
+        if matches:
+            preamble = markdown[:matches[0].start()].strip()
+            preamble = re.sub(r"(?m)^#\s+.*$", "", preamble).strip()
+            if preamble:
+                sections["Audit details"] = preamble
+        for index, match in enumerate(matches):
+            end = matches[index + 1].start() if index + 1 < len(matches) else len(markdown)
+            sections[match.group(1).strip()] = markdown[match.end():end].strip()
+        return sections
+
+    @classmethod
+    def _split_findings(cls, markdown: str) -> list[tuple[str, str, tuple[str, str, str], str]]:
+        matches = list(re.finditer(r"(?m)^###\s+(.+?)\s*$", markdown))
+        result = []
+        for index, match in enumerate(matches):
+            end = matches[index + 1].start() if index + 1 < len(matches) else len(markdown)
+            raw_title = match.group(1).strip()
+            block = markdown[match.end():end].strip()
+            priority, severity, confidence = "", "", ""
+            meta_match = re.search(
+                r"(?im)^\s*(?:[-*]\s*)?\*\*Priority\s*/\s*severity\s*/\s*confidence:\*\*\s*(P\d)\s*/\s*(High|Medium|Low)\s*/\s*(High|Medium|Low)",
+                block,
+            )
+            if meta_match:
+                priority, severity, confidence = meta_match.groups()
+                block = block[:meta_match.start()] + block[meta_match.end():]
+
+            prompt = ""
+            prompt_match = re.search(r"(?im)^\s*(?:[-*]\s*)?\*\*Example AI agent fix prompt:\*\*\s*", block)
+            if prompt_match:
+                prompt_lines = block[prompt_match.end():].strip().splitlines()
+                cleaned = []
+                for line in prompt_lines:
+                    if line.strip().startswith(">"):
+                        cleaned.append(re.sub(r"^\s*>\s?", "", line))
+                    elif cleaned and line.strip():
+                        cleaned.append(line.strip())
+                prompt = "\n".join(cleaned).strip()
+                block = block[:prompt_match.start()].strip()
+
+            title = re.sub(r"^(?:F?\d+[.:]?\s*)", "", raw_title).strip() or raw_title
+            result.append((title, block, (priority, severity, confidence), prompt))
+        return result
+
+    @staticmethod
+    def _add_section(layout, title: str, markdown: str, chip_bg: str = "#e2e8f0", chip_fg: str = "#334155"):
+        card = QtWidgets.QFrame()
+        card.setStyleSheet("QFrame { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; }")
+        box = QtWidgets.QVBoxLayout(card)
+        box.setContentsMargins(18, 15, 18, 15)
+        heading = QtWidgets.QLabel(title)
+        heading.setStyleSheet(f"color: {chip_fg}; background: {chip_bg}; border-radius: 8px; padding: 4px 8px; font-weight: 700;")
+        heading.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Fixed)
+        box.addWidget(heading, 0, QtCore.Qt.AlignLeft)
+        box.addWidget(AuditMarkdownView(markdown, card))
+        layout.addWidget(card)
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -980,7 +1237,24 @@ class MainWindow(QtWidgets.QMainWindow):
             return
 
         self._set_status(f"{app_name}: audit complete. Report saved to {saved_path}")
-        QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(saved_path))
+        self._show_audit_report(app_name, Path(saved_path))
+
+    def _show_audit_report(self, app_name: str, report_path: Path):
+        """Display a saved Markdown audit report in a window owned by this app."""
+        try:
+            markdown = report_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            self._set_status(f"Could not read the audit report for {app_name}.")
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Performance audit",
+                f"Could not read the saved report:\n{report_path}\n\n{exc}",
+            )
+            return
+
+        dialog = AuditReportDialog(app_name, markdown, self)
+        dialog.show()
+        self._audit_report_dialog = dialog
 
     @QtCore.Slot()
     def open_selected_app_last_audit(self):
@@ -989,8 +1263,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if report_path is None:
             self._set_status(f"No saved audit report for {app_name or 'the selected app'}.")
             return
-        QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(report_path)))
-        self._set_status(f"Opened last audit report for {app_name}.")
+        self._show_audit_report(app_name, report_path)
+        self._set_status(f"Showing last audit report for {app_name}.")
 
     @QtCore.Slot(int)
     def _on_server_environment_changed(self, _index: int):
@@ -1252,9 +1526,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         new_apps: list[CachedApp] = []
         for a in manifest.apps:
-            repo_folder = WHAT_REPO_FOLDER if a.name.upper() == "WHAT" else a.name
-            repo_path = rf"{GITHUB_ROOT}\{repo_folder}"
-            iss_path = rf"{repo_path}\{INNO_ISS_RELATIVE}"
+            repo_path, iss_path = github_paths_for_app(a.name)
 
             new_apps.append(
                 CachedApp(
