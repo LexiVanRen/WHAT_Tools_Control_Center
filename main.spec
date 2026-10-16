@@ -23,7 +23,12 @@ a = Analysis(
     pathex=['C:\\Users\\ABC-RnD\\Documents\\GitHub\\WHAT_Tools_Control_Center'],
     datas=[
         ('inno_setup_script_for_making_installer.iss', '.'),
-    ] + collect_folder('assets') + collect_folder('cache') + collect_folder('ui'),
+    ] + (
+        collect_folder('assets')
+        + collect_folder('cache')
+        + collect_folder('ui')
+        + collect_folder(os.path.join('.agents', 'skills'))
+    ),
     hiddenimports=['pkg_resources', 'pkg_resources.extern'],
     hookspath=[],
     runtime_hooks=[],

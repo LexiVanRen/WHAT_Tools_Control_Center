@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -24,6 +25,7 @@ from ui.server_config import (
     load_server_environment,
     save_server_environment,
 )
+from ui.performance_audit import PerformanceAuditWorker, last_audit_path
 
 CACHE_PATH = os.path.join(os.getenv("LOCALAPPDATA"), "WHATControlCenter", "cache")
 @dataclass
@@ -398,6 +400,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._manifest: Optional[ManifestData] = None
         self._row_states: dict[str, RowState] = {}
         self._refresh_all_in_progress: bool = False
+        self._audit_running_app: str = ""
 
         self._build_ui()
         self._apply_style()
@@ -541,13 +544,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self.table.verticalHeader().setVisible(False)
         self.table.setAlternatingRowColors(True)
         self.table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        self.table.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
+        self.table.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._show_app_context_menu)
+        self.table.currentCellChanged.connect(lambda *_: self._update_audit_buttons())
 
         # Show every row; allow horizontal scrolling for the wide set of columns.
         self.table.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
         self.table.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
 
-        # No selection highlighting (prevents ugly blocks on checkbox columns)
-        self.table.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
+        # Keep the table's existing no-highlight behavior while tracking its current row.
         self.table.setFocusPolicy(QtCore.Qt.NoFocus)
 
         # Keep descriptions compact while allowing patch notes to wrap fully.
@@ -619,6 +625,21 @@ class MainWindow(QtWidgets.QMainWindow):
         self.btn_view_stats.setMinimumHeight(56)
         self.btn_view_stats.setMinimumWidth(180)
         new_app_row.addWidget(self.btn_view_stats)
+
+        self.btn_start_audit = QtWidgets.QPushButton("⚡ Start audit")
+        self.btn_start_audit.setMinimumHeight(56)
+        self.btn_start_audit.setMinimumWidth(180)
+        self.btn_start_audit.setToolTip("Ask Codex CLI to audit the selected app's performance")
+        self.btn_start_audit.clicked.connect(self.start_selected_app_audit)
+        self.btn_start_audit.setEnabled(False)
+        new_app_row.addWidget(self.btn_start_audit)
+
+        self.btn_last_audit = QtWidgets.QPushButton("📄 See last audit results")
+        self.btn_last_audit.setMinimumHeight(56)
+        self.btn_last_audit.setMinimumWidth(220)
+        self.btn_last_audit.clicked.connect(self.open_selected_app_last_audit)
+        self.btn_last_audit.setEnabled(False)
+        new_app_row.addWidget(self.btn_last_audit)
 
         new_app_row.addStretch(1)
 
@@ -883,6 +904,94 @@ class MainWindow(QtWidgets.QMainWindow):
     def open_stats_page(self):
         stats_url = f"{self.server_base_url}/what_tools_stats/"
         QtGui.QDesktopServices.openUrl(QtCore.QUrl(stats_url))
+
+    def _selected_app_name(self) -> str:
+        row = self.table.currentRow()
+        if row < 0:
+            return ""
+        item = self.table.item(row, 0)
+        return item.text().strip() if item else ""
+
+    def _update_audit_buttons(self):
+        app_name = self._selected_app_name()
+        self.btn_start_audit.setEnabled(bool(app_name) and not self._audit_running_app)
+        self.btn_last_audit.setEnabled(bool(app_name) and last_audit_path(app_name) is not None)
+
+    @QtCore.Slot(QtCore.QPoint)
+    def _show_app_context_menu(self, pos):
+        row = self.table.rowAt(pos.y())
+        if row < 0:
+            return
+        self.table.setCurrentCell(row, 0)
+        app_name = self._selected_app_name()
+
+        menu = QtWidgets.QMenu(self)
+        start_action = menu.addAction("⚡ Start audit")
+        last_action = menu.addAction("📄 See last audit results")
+        start_action.setEnabled(not self._audit_running_app)
+        last_action.setEnabled(last_audit_path(app_name) is not None)
+        chosen = menu.exec(self.table.viewport().mapToGlobal(pos))
+        if chosen is start_action:
+            self.start_selected_app_audit()
+        elif chosen is last_action:
+            self.open_selected_app_last_audit()
+
+    @QtCore.Slot()
+    def start_selected_app_audit(self):
+        app_name = self._selected_app_name()
+        if not app_name:
+            self._set_status("Select an application first.")
+            return
+        if self._audit_running_app:
+            self._set_status(f"An audit for {self._audit_running_app} is already running.")
+            return
+        if self._refresh_all_in_progress or not self.btn_run.isEnabled():
+            self._set_status("Wait for the current operation to finish before starting an audit.")
+            return
+
+        app = next((item for item in self.cache.apps if item.name == app_name), None)
+        repo_path = str(getattr(getattr(app, "github", None), "repo_path", "") or "").strip()
+        if not repo_path:
+            repo_path, _ = self._compute_github_paths(app_name)
+        app_root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent)).resolve()
+        skill_root = app_root / ".agents" / "skills"
+        skill_path = skill_root / "performance-audit" / "SKILL.md"
+
+        self._audit_running_app = app_name
+        self._update_audit_buttons()
+        self._audit_thread = QtCore.QThread(self)
+        self._audit_worker = PerformanceAuditWorker(app_name, repo_path, str(skill_path), str(skill_root))
+        self._audit_worker.moveToThread(self._audit_thread)
+        self._audit_thread.started.connect(self._audit_worker.run)
+        self._audit_worker.progress.connect(self._set_status)
+        self._audit_worker.finished.connect(self._on_app_audit_finished)
+        self._audit_worker.finished.connect(self._audit_thread.quit)
+        self._audit_worker.finished.connect(self._audit_worker.deleteLater)
+        self._audit_thread.finished.connect(self._audit_thread.deleteLater)
+        self._audit_thread.start()
+
+    @QtCore.Slot(str, str, str)
+    def _on_app_audit_finished(self, report: str, error: str, saved_path: str):
+        app_name = self._audit_running_app
+        self._audit_running_app = ""
+        self._update_audit_buttons()
+        if error:
+            self._set_status(f"{app_name}: audit failed: {error.splitlines()[0]}")
+            QtWidgets.QMessageBox.warning(self, "Performance audit", error)
+            return
+
+        self._set_status(f"{app_name}: audit complete. Report saved to {saved_path}")
+        QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(saved_path))
+
+    @QtCore.Slot()
+    def open_selected_app_last_audit(self):
+        app_name = self._selected_app_name()
+        report_path = last_audit_path(app_name) if app_name else None
+        if report_path is None:
+            self._set_status(f"No saved audit report for {app_name or 'the selected app'}.")
+            return
+        QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(report_path)))
+        self._set_status(f"Opened last audit report for {app_name}.")
 
     @QtCore.Slot(int)
     def _on_server_environment_changed(self, _index: int):
