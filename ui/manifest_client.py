@@ -9,7 +9,12 @@ from ui.models import ManifestData, parse_manifest
 MANIFEST_SAVE_PATH = Path.home() / "Documents" / "ABC_WHAT_Tools" / "manifest.json"
 
 
-def fetch_manifest(url: str, timeout_s: float = 8.0) -> ManifestData:
+def fetch_manifest(
+    url: str,
+    timeout_s: float = 8.0,
+    *,
+    persist_copy: bool = True,
+) -> ManifestData:
     req = urllib.request.Request(
         url,
         headers={
@@ -24,9 +29,10 @@ def fetch_manifest(url: str, timeout_s: float = 8.0) -> ManifestData:
         raw = resp.read().decode("utf-8", errors="replace")
 
     payload: dict[str, Any] = json.loads(raw)
-    MANIFEST_SAVE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    MANIFEST_SAVE_PATH.write_text(
-        json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
+    if persist_copy:
+        MANIFEST_SAVE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        MANIFEST_SAVE_PATH.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
     return parse_manifest(payload, source_url=url)

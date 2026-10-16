@@ -25,6 +25,15 @@ INSTALLER_EXE_OVERRIDES = {
 INSTALLERS_DIR = r"Z:\R&D\WHAT_installers"
 
 
+def github_paths_for_app(app_name: str) -> tuple[str, str]:
+    """Return the configured source repository and installer script paths."""
+    repo_path = GITHUB_REPO_OVERRIDES.get(app_name)
+    if not repo_path:
+        repo_folder = WHAT_REPO_FOLDER if app_name.upper() == "WHAT" else app_name
+        repo_path = rf"{GITHUB_ROOT}\{repo_folder}"
+    return repo_path, rf"{repo_path}\{INNO_ISS_RELATIVE}"
+
+
 @dataclass(frozen=True)
 class AppEntry:
     name: str

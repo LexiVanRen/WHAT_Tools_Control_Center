@@ -27,6 +27,7 @@ a = Analysis(
         collect_folder('assets')
         + collect_folder('cache')
         + collect_folder('ui')
+        # The headless audit resolves its skill from the bundled app root.
         + collect_folder(os.path.join('.agents', 'skills'))
     ),
     hiddenimports=['pkg_resources', 'pkg_resources.extern'],

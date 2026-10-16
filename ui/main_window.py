@@ -9,8 +9,7 @@ from typing import Optional
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from ui.models import INSTALLERS_DIR, GITHUB_ROOT, WHAT_REPO_FOLDER, INNO_ISS_RELATIVE, \
-    GITHUB_REPO_OVERRIDES, LOCAL_VERSION_PACKAGE_JSON_OVERRIDES, ManifestData
+from ui.models import INSTALLERS_DIR, LOCAL_VERSION_PACKAGE_JSON_OVERRIDES, ManifestData, github_paths_for_app
 
 from ui.manifest_client import fetch_manifest
 from ui.installer_scan import find_installer_for_app, InstallerInfo
@@ -1288,18 +1287,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.cmb_server_environment.setEnabled(True)
 
     def _compute_github_paths(self, app_name: str) -> tuple[str, str]:
-        # 1) explicit overrides win
-        override = GITHUB_REPO_OVERRIDES.get(app_name)
-        if override:
-            repo_path = override
-            iss_path = rf"{repo_path}\{INNO_ISS_RELATIVE}"
-            return repo_path, iss_path
-
-        # 2) default naming
-        repo_folder = WHAT_REPO_FOLDER if app_name.upper() == "WHAT" else app_name
-        repo_path = rf"{GITHUB_ROOT}\{repo_folder}"
-        iss_path = rf"{repo_path}\{INNO_ISS_RELATIVE}"
-        return repo_path, iss_path
+        return github_paths_for_app(app_name)
 
     # ---------------------------
     # Refresh info
